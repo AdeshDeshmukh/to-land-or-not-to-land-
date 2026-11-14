@@ -8,6 +8,7 @@ import { LanderSelector } from './components/LanderSelector';
 import { CustomProbeModal } from './components/CustomProbeModal';
 import { Starfield } from './components/Starfield';
 import { HorizonPlot } from './components/HorizonPlot';
+import { CountdownTimers } from './components/CountdownTimers';
 import { ComparisonModal } from './components/ComparisonModal';
 import { 
   ShieldCheck, 
@@ -22,7 +23,10 @@ import {
   Zap, 
   Flame, 
   Clock,
-  MapPin
+  MapPin,
+  Play,
+  Pause,
+  RotateCcw
 } from 'lucide-react';
 
 export default function App() {
@@ -30,6 +34,8 @@ export default function App() {
   const [selectedLander, setSelectedLander] = useState<LanderProfile>(DEFAULT_LANDER_PROFILES[0]);
   const [selectedSite, setSelectedSite] = useState<CandidateSite>(CANDIDATE_SITES[0]);
   const [simulatedDateOffset, setSimulatedDateOffset] = useState<number>(0); // Days offset
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [isComparisonOpen, setIsComparisonOpen] = useState<boolean>(false);
   const [isProbeModalOpen, setIsProbeModalOpen] = useState<boolean>(false);
   const [probeCoords, setProbeCoords] = useState<{ lat: number; lon: number }>({ lat: -85, lon: 15 });
@@ -54,6 +60,21 @@ export default function App() {
     const interval = setInterval(updateTime, 1000);
     return () => clearInterval(interval);
   }, []);
+
+  // Synodic lunar day/night cycle animation loop (-14d to +14d)
+  useEffect(() => {
+    if (!isPlaying) return;
+    const interval = setInterval(() => {
+      setSimulatedDateOffset(prev => {
+        const next = Math.round((prev + 0.1 * playbackSpeed) * 10) / 10;
+        if (next > 14) {
+          return -14;
+        }
+        return next;
+      });
+    }, 100);
+    return () => clearInterval(interval);
+  }, [isPlaying, playbackSpeed]);
 
   // Simulate illumination shifts based on date offset
   const computedIllumination = Math.max(
@@ -200,25 +221,77 @@ export default function App() {
             </div>
           </div>
 
-          {/* Launch Date Simulation Scrubber & Presets */}
+          {/* Launch Date Simulation Scrubber, Day/Night Animation & Presets */}
           <div className="bg-space-900 border border-slate-800 rounded-xl p-5 shadow-lg">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
                 <Sun className="w-4 h-4 text-amber-400" /> Launch Window Slip Simulator
               </h3>
               <span className="text-xs font-mono px-2 py-0.5 rounded bg-slate-800 text-amber-300">
-                T {simulatedDateOffset >= 0 ? `+${simulatedDateOffset}` : simulatedDateOffset} Days
+                T {simulatedDateOffset >= 0 ? `+${simulatedDateOffset.toFixed(1)}` : simulatedDateOffset.toFixed(1)} Days
               </span>
             </div>
             <p className="text-xs text-slate-400 mb-3">
-              Simulate launch slips to observe changes in solar illumination cycles and shadow traps.
+              Simulate launch slips or play the synodic cycle to observe terminator shadow sweeps and solar power windows.
             </p>
+
+            {/* Play/Pause & Speed Controller */}
+            <div className="flex items-center justify-between mb-3 bg-space-950/70 p-2 rounded-lg border border-slate-800/80">
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setIsPlaying(prev => !prev)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-mono font-medium transition shadow-sm ${
+                    isPlaying 
+                      ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-[0_0_10px_rgba(245,158,11,0.2)]' 
+                      : 'bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-500/20'
+                  }`}
+                  title={isPlaying ? "Pause synodic cycle animation" : "Play lunar day/night terminator sweep"}
+                >
+                  {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                  <span>{isPlaying ? 'Pause' : 'Play Cycle'}</span>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsPlaying(false);
+                    setSimulatedDateOffset(0);
+                  }}
+                  className="p-1.5 rounded-md bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700/60 transition"
+                  title="Reset to Nominal (T-0)"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              {/* Speed Controller Pills */}
+              <div className="flex items-center gap-1 text-[11px] font-mono">
+                <span className="text-slate-400 mr-1 text-[10px]">Speed:</span>
+                {[1, 2, 5].map((speed) => (
+                  <button
+                    key={speed}
+                    onClick={() => setPlaybackSpeed(speed)}
+                    className={`px-2 py-0.5 rounded text-[11px] font-mono transition ${
+                      playbackSpeed === speed
+                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold'
+                        : 'bg-slate-800/60 text-slate-400 hover:text-slate-200 border border-transparent'
+                    }`}
+                  >
+                    {speed}x
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <input 
               type="range" 
               min="-14" 
               max="14" 
+              step="0.1"
               value={simulatedDateOffset}
-              onChange={(e) => setSimulatedDateOffset(Number(e.target.value))}
+              onChange={(e) => {
+                setIsPlaying(false);
+                setSimulatedDateOffset(Number(e.target.value));
+              }}
               className="w-full accent-cyan-400 bg-slate-800 rounded-lg h-2 cursor-pointer"
             />
             <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1 mb-4">
@@ -235,6 +308,7 @@ export default function App() {
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={() => {
+                    setIsPlaying(false);
                     setSimulatedDateOffset(0);
                     setSelectedSite(CANDIDATE_SITES[0]);
                   }}
@@ -245,6 +319,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => {
+                    setIsPlaying(false);
                     setSimulatedDateOffset(6);
                     setSelectedSite(CANDIDATE_SITES[2]);
                   }}
@@ -329,6 +404,14 @@ export default function App() {
           <HorizonPlot 
             site={selectedSite} 
             simulatedDateOffset={simulatedDateOffset} 
+          />
+
+          {/* Telemetry Survival & Countdown Timers */}
+          <CountdownTimers 
+            site={selectedSite}
+            simulatedDateOffset={simulatedDateOffset}
+            computedIllumination={computedIllumination}
+            lander={selectedLander}
           />
 
           {/* Telemetry Bar */}
