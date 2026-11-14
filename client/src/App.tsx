@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { CANDIDATE_SITES } from './data/candidateSites';
 import { assessLandingSiteRisk } from './engine/riskEngine';
 import { CandidateSite } from './types';
-import { LunarGlobe } from './components/LunarGlobe';
+import { LunarGlobe3D } from './components/LunarGlobe3D';
 import { Starfield } from './components/Starfield';
 import { HorizonPlot } from './components/HorizonPlot';
 import { ComparisonModal } from './components/ComparisonModal';
@@ -208,8 +208,8 @@ export default function App() {
         {/* Right Column: Deep Risk Factor Inspector */}
         <section className="lg:col-span-8 flex flex-col gap-5">
           
-          {/* Interactive 3D/2.5D Lunar Globe Viewport */}
-          <LunarGlobe 
+          {/* Interactive 3D Lunar Globe Viewport */}
+          <LunarGlobe3D 
             sites={CANDIDATE_SITES} 
             selectedSite={selectedSite} 
             onSelectSite={setSelectedSite} 
