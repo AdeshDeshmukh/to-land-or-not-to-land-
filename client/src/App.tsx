@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
 import { CANDIDATE_SITES } from './data/candidateSites';
+import { DEFAULT_LANDER_PROFILES } from './data/landerProfiles';
 import { assessLandingSiteRisk } from './engine/riskEngine';
-import { CandidateSite } from './types';
+import { CandidateSite, LanderProfile } from './types';
 import { LunarGlobe3D } from './components/LunarGlobe3D';
+import { LanderSelector } from './components/LanderSelector';
 import { Starfield } from './components/Starfield';
 import { HorizonPlot } from './components/HorizonPlot';
 import { ComparisonModal } from './components/ComparisonModal';
@@ -22,6 +24,7 @@ import {
 } from 'lucide-react';
 
 export default function App() {
+  const [selectedLander, setSelectedLander] = useState<LanderProfile>(DEFAULT_LANDER_PROFILES[0]);
   const [selectedSite, setSelectedSite] = useState<CandidateSite>(CANDIDATE_SITES[0]);
   const [simulatedDateOffset, setSimulatedDateOffset] = useState<number>(0); // Days offset
   const [isComparisonOpen, setIsComparisonOpen] = useState<boolean>(false);
@@ -43,7 +46,12 @@ export default function App() {
     Math.min(100, Math.round(selectedSite.defaultIlluminationPct + Math.sin(simulatedDateOffset * 0.4) * 25))
   );
 
-  const assessment = assessLandingSiteRisk(selectedSite, computedIllumination, selectedSite.defaultEarthLos);
+  const assessment = assessLandingSiteRisk(
+    selectedSite, 
+    computedIllumination, 
+    selectedSite.defaultEarthLos, 
+    selectedLander
+  );
 
   const getStatusBadge = (status: 'GREEN' | 'YELLOW' | 'RED') => {
     switch (status) {
@@ -112,15 +120,22 @@ export default function App() {
       {/* Main Content Grid */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         
-        {/* Left Column: Candidate Site Selector */}
+        {/* Left Column: Vehicle & Site Selector */}
         <section className="lg:col-span-4 flex flex-col gap-4">
+          
+          {/* Lander Architecture Selector */}
+          <LanderSelector 
+            selectedLander={selectedLander} 
+            onSelectLander={setSelectedLander} 
+          />
+
           <div className="bg-space-900 border border-slate-800 rounded-xl p-5 shadow-lg">
             <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-3 flex items-center gap-2">
               <Compass className="w-4 h-4 text-cyan-400" /> Candidate Landing Sites
             </h2>
             <div className="space-y-2">
               {CANDIDATE_SITES.map((site) => {
-                const siteRisk = assessLandingSiteRisk(site);
+                const siteRisk = assessLandingSiteRisk(site, undefined, undefined, selectedLander);
                 const isSelected = site.id === selectedSite.id;
                 return (
                   <button
@@ -214,6 +229,7 @@ export default function App() {
             selectedSite={selectedSite} 
             onSelectSite={setSelectedSite} 
             sunIlluminationOffset={simulatedDateOffset}
+            lander={selectedLander}
           />
 
           {/* Top Banner: Site Status Summary */}
@@ -230,9 +246,14 @@ export default function App() {
               {selectedSite.description}
             </p>
 
-            <div className="bg-space-950/60 rounded-lg p-3.5 border border-slate-800/80 text-xs font-mono flex items-center gap-2 text-slate-300">
-              <Activity className="w-4 h-4 text-cyan-400 shrink-0" />
-              <span>Assessment Summary: {assessment.overall_reason}</span>
+            <div className="bg-space-950/60 rounded-lg p-3.5 border border-slate-800/80 text-xs font-mono flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-slate-300">
+              <div className="flex items-center gap-2">
+                <Activity className="w-4 h-4 text-cyan-400 shrink-0" />
+                <span>Assessment Summary: {assessment.overall_reason}</span>
+              </div>
+              <span className="text-[10px] text-cyan-300 bg-cyan-950/40 border border-cyan-500/30 px-2 py-0.5 rounded shrink-0 self-start sm:self-auto">
+                Profile: {selectedLander.name}
+              </span>
             </div>
           </div>
 
@@ -297,6 +318,7 @@ export default function App() {
         isOpen={isComparisonOpen}
         onClose={() => setIsComparisonOpen(false)}
         onSelectSite={setSelectedSite}
+        lander={selectedLander}
       />
 
       {/* Footer */}

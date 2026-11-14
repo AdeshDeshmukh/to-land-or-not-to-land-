@@ -37,3 +37,16 @@ export interface RiskAssessment {
   factors: RiskFactor[];
 }
 
+export interface LanderProfile {
+  id: string;
+  name: string;
+  agency: string;
+  subtitle: string;
+  maxSlopeDeg: number;          // Tipping/stability limit
+  minIlluminationPct: number;   // Solar power/thermal limit
+  requiresEarthLos: boolean;    // Direct comms requirement
+  maxRoughness: 'LOW' | 'MODERATE' | 'HIGH'; // Landing gear tolerance
+  payloadCapacityKg: number;
+  crewCapacity: number;         // 0 for uncrewed robotic
+  description: string;
+}
