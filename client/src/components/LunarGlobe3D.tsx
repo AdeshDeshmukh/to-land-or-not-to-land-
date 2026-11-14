@@ -26,7 +26,9 @@ import {
   Clock,
   Focus,
   BarChart3,
+  Layers,
 } from 'lucide-react';
+import { LocalSurfaceDetailView } from './LocalSurfaceDetailView';
 
 interface LunarGlobe3DProps {
   sites: CandidateSite[];
@@ -65,7 +67,7 @@ const GRID_W = 512;
 const GRID_H = 256;
 const SURF_TEX_W = 2048;
 const SURF_TEX_H = 1024;
-const MIN_CAM_DIST = 4.35;
+const MIN_CAM_DIST = 4.10;
 const MAX_CAM_DIST = 15.0;
 
 const INITIAL_CAM_POS = new THREE.Vector3(5.6, -5.8, -2.2);
@@ -431,11 +433,11 @@ function paintLunarSurfaceTextures(
         );
 
         heightNorm += (eC / 255 - 0.5) * 0.45 * lolaWeight;
-        dH_dEast += ((eE_plus - eE_minus) / 255) * 2.35 * lolaWeight;
-        dH_dNorth += ((eN_plus - eN_minus) / 255) * 2.35 * lolaWeight;
+        dH_dEast += ((eE_plus - eE_minus) / 255) * 2.65 * lolaWeight;
+        dH_dNorth += ((eN_plus - eN_minus) / 255) * 2.65 * lolaWeight;
       }
 
-      // 3) Uniform subtle global 3D micro-regolith normal grain across all latitudes (-90°..+90°)
+      // 3) Multi-scale isotropic 3D micro-regolith grain & fine craterlet normal relief across (-90°..+90°)
       const px0 = vx * nFreq;
       const py0 = vy * nFreq;
       const pz0 = vz * nFreq;
@@ -445,8 +447,31 @@ function paintLunarSurfaceTextures(
       const nN =
         fbm3D(px0 + nxAxis * noiseEps * nFreq, py0 + nyAxis * noiseEps * nFreq, pz0 + nzAxis * noiseEps * nFreq) -
         fbm3D(px0 - nxAxis * noiseEps * nFreq, py0 - nyAxis * noiseEps * nFreq, pz0 - nzAxis * noiseEps * nFreq);
-      dH_dEast += (nE / (2 * noiseEps * nFreq)) * 0.035;
-      dH_dNorth += (nN / (2 * noiseEps * nFreq)) * 0.035;
+      dH_dEast += (nE / (2 * noiseEps * nFreq)) * 0.038;
+      dH_dNorth += (nN / (2 * noiseEps * nFreq)) * 0.038;
+
+      const nFreqFine = 64.0;
+      const noiseEpsFine = 0.004;
+      const fx0 = vx * nFreqFine;
+      const fy0 = vy * nFreqFine;
+      const fz0 = vz * nFreqFine;
+      const nfE =
+        noise3D(fx0 + ex * noiseEpsFine * nFreqFine, fy0, fz0 + ez * noiseEpsFine * nFreqFine) -
+        noise3D(fx0 - ex * noiseEpsFine * nFreqFine, fy0, fz0 - ez * noiseEpsFine * nFreqFine);
+      const nfN =
+        noise3D(
+          fx0 + nxAxis * noiseEpsFine * nFreqFine,
+          fy0 + nyAxis * noiseEpsFine * nFreqFine,
+          fz0 + nzAxis * noiseEpsFine * nFreqFine
+        ) -
+        noise3D(
+          fx0 - nxAxis * noiseEpsFine * nFreqFine,
+          fy0 - nyAxis * noiseEpsFine * nFreqFine,
+          fz0 - nzAxis * noiseEpsFine * nFreqFine
+        );
+      dH_dEast += (nfE / (2 * noiseEpsFine * nFreqFine)) * 0.028;
+      dH_dNorth += (nfN / (2 * noiseEpsFine * nFreqFine)) * 0.028;
+      albedoLum += noise3D(fx0, fy0, fz0) * 3.5;
 
       // 4) Smoothly feathered South Pole crater relief matching LOLA texture character & contrast
       if (polarBlend > 0.002) {
@@ -648,9 +673,9 @@ function buildTerrainGrid(presetSites: CandidateSite[], bumpImg?: HTMLImageEleme
 
       slopeDeg[idx] = craterSample
         ? Math.max(
-            1.0,
-            Math.min(28.0, baseSlope * (1 - polarBlend * 0.45) + craterSample.slopeDeg * polarBlend * 0.55)
-          )
+          1.0,
+          Math.min(28.0, baseSlope * (1 - polarBlend * 0.45) + craterSample.slopeDeg * polarBlend * 0.55)
+        )
         : Math.max(1.0, Math.min(22.0, baseSlope));
 
       const lolaElevM = ((eC - 128) / 128) * 5200 * lolaWeight;
@@ -874,6 +899,8 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   const [overlayOpacity, setOverlayOpacity] = useState<number>(55);
   const [autoRotate, setAutoRotate] = useState<boolean>(false);
   const [isZoomedIn, setIsZoomedIn] = useState<boolean>(false);
+  const [isLowOrbit, setIsLowOrbit] = useState<boolean>(false);
+  const [isLocalSurfaceOpen, setIsLocalSurfaceOpen] = useState<boolean>(false);
   const [isProbeMode, setIsProbeMode] = useState<boolean>(false);
   const [isCoordInputOpen, setIsCoordInputOpen] = useState<boolean>(false);
   const [latInput, setLatInput] = useState<string>('-89.54');
@@ -1043,7 +1070,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     if (rotY !== 0) {
       normal.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotY);
     }
-    const targetDist = 5.8;
+    const targetDist = camDistRef.current < 4.55 ? 4.15 : 4.65;
     const targetUp = computeUpForNormal(normal);
 
     angVelRef.current = { x: 0, y: 0 };
@@ -1054,6 +1081,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       targetDist,
     };
     setIsZoomedIn(true);
+    setIsLowOrbit(targetDist < 4.55);
   }, []);
 
   // Fly back out to orbital overview showing Near Side + South Pole
@@ -1070,6 +1098,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       targetDist,
     };
     setIsZoomedIn(false);
+    setIsLowOrbit(false);
   }, []);
 
   // Zoom directly over the Artemis South Pole cluster
@@ -1088,6 +1117,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       targetDist,
     };
     setIsZoomedIn(true);
+    setIsLowOrbit(false);
   }, []);
 
   // Setup Three.js Scene + Quaternion Virtual-Globe Camera Controller
@@ -1202,7 +1232,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       bumpTexture
     );
 
-    const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 128, 128);
+    const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 192, 192);
     const moonMaterial = new THREE.MeshStandardMaterial({
       map: monoTexture,
       normalMap: normalTexture,
@@ -1227,7 +1257,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     overlayTexture.magFilter = THREE.LinearFilter;
     overlayTextureRef.current = overlayTexture;
 
-    const overlayGeo = new THREE.SphereGeometry(MOON_RADIUS * 1.002, 128, 128);
+    const overlayGeo = new THREE.SphereGeometry(MOON_RADIUS * 1.002, 192, 192);
     const overlayMat = new THREE.MeshLambertMaterial({
       map: overlayTexture,
       transparent: true,
@@ -1360,7 +1390,8 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         lastX = event.clientX;
         lastY = event.clientY;
 
-        const scale = Math.max(0.22, (camDistRef.current - MOON_RADIUS) / (MOON_RADIUS * 1.6)) * 0.0052;
+        const scale =
+          Math.max(0.055, (camDistRef.current - MOON_RADIUS * 0.96) / (MOON_RADIUS * 1.6)) * 0.0052;
         const dYaw = dx * scale;
         const dPitch = dy * scale;
         rotateCameraByScreenDelta(camera, dYaw, dPitch);
@@ -1486,6 +1517,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       );
       targetCamDistRef.current = nextDist;
       setIsZoomedIn(nextDist < 7.2);
+      setIsLowOrbit(nextDist < 4.55);
     };
 
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
@@ -1925,11 +1957,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
                 onMouseEnter={() => setHoveredSite(site)}
                 onMouseLeave={() => setHoveredSite(null)}
                 style={{ display: 'none' }}
-                className={`pointer-events-auto cursor-pointer absolute top-0 left-0 items-center gap-1.5 px-2 py-0.5 rounded-[2px] border font-mono text-[10px] uppercase tracking-wider whitespace-nowrap transition-colors ${
-                  isSelected
-                    ? 'bg-[#090A0D] border-white/60 text-white'
-                    : 'bg-[#090A0D]/90 border-white/[0.14] text-[#9CA3AF] hover:text-white hover:border-white/35'
-                }`}
+                className={`pointer-events-auto cursor-pointer absolute top-0 left-0 items-center gap-1.5 px-2 py-0.5 rounded-[2px] border font-mono text-[10px] uppercase tracking-wider whitespace-nowrap transition-colors ${isSelected
+                  ? 'bg-[#090A0D] border-white/60 text-white'
+                  : 'bg-[#090A0D]/90 border-white/[0.14] text-[#9CA3AF] hover:text-white hover:border-white/35'
+                  }`}
               >
                 <span
                   style={{ backgroundColor: hex }}
@@ -1955,7 +1986,11 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           <span>
             VIEW //{' '}
             <span className="text-white font-semibold">
-              {isZoomedIn ? 'DESCENT INSPECTION' : 'ORBITAL OVERVIEW'}
+              {isLowOrbit
+                ? 'LOW ORBIT INSPECTION'
+                : isZoomedIn
+                  ? 'DESCENT INSPECTION'
+                  : 'ORBITAL OVERVIEW'}
             </span>
           </span>
         </div>
@@ -1971,11 +2006,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           >
             <span className="text-[#9CA3AF]">Landing Assessment Overlay:</span>
             <span
-              className={`px-1.5 py-0.5 rounded-[2px] border font-bold ${
-                showAssessmentOverlay
-                  ? 'bg-white text-black border-white'
-                  : 'bg-[#12141A] text-[#9CA3AF] border-white/[0.14]'
-              }`}
+              className={`px-1.5 py-0.5 rounded-[2px] border font-bold ${showAssessmentOverlay
+                ? 'bg-white text-black border-white'
+                : 'bg-[#12141A] text-[#9CA3AF] border-white/[0.14]'
+                }`}
             >
               {showAssessmentOverlay ? 'ON' : 'OFF'}
             </span>
@@ -2011,11 +2045,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
               setIsCoordInputOpen((prev) => !prev);
               setIsProbeMode(false);
             }}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${
-              isCoordInputOpen
-                ? 'bg-white text-black font-bold border-white'
-                : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
-            }`}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${isCoordInputOpen
+              ? 'bg-white text-black font-bold border-white'
+              : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
+              }`}
             title="Enter custom lunar latitude & longitude coordinates"
           >
             <Crosshair className="w-3.5 h-3.5" />
@@ -2028,11 +2061,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
               setIsProbeMode((prev) => !prev);
               setIsCoordInputOpen(false);
             }}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${
-              isProbeMode
-                ? 'bg-white text-black font-bold border-white'
-                : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
-            }`}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${isProbeMode
+              ? 'bg-white text-black font-bold border-white'
+              : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
+              }`}
             title="Clicking anywhere on the Moon inspects coordinates & risk (toggle precision crosshair cursor)"
           >
             <MapPin className="w-3.5 h-3.5" />
@@ -2042,14 +2074,24 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           <button
             type="button"
             onClick={() => setAutoRotate((prev) => !prev)}
-            className={`p-1.5 rounded-[2px] text-[10px] transition border ${
-              autoRotate
-                ? 'bg-white text-black border-white'
-                : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
-            }`}
+            className={`p-1.5 rounded-[2px] text-[10px] transition border ${autoRotate
+              ? 'bg-white text-black border-white'
+              : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
+              }`}
             title="Toggle orbital rotation"
           >
             <RotateCw className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            data-testid="open-local-surface-top-btn"
+            onClick={() => setIsLocalSurfaceOpen((prev) => !prev)}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-[2px] bg-[#090A0D]/95 hover:bg-[#12141A] border border-white/[0.14] hover:border-white/35 text-[10px] font-mono uppercase tracking-wider text-white transition"
+            title="Inspect 2.4 km × 2.4 km high-resolution 3D local surface DEM & boulder hazard patch"
+          >
+            <Layers className="w-3.5 h-3.5" />
+            <span>3D Surface DEM</span>
           </button>
 
           <button
@@ -2305,21 +2347,31 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           </div>
         </div>
 
-        {/* Actions: Focus Cam / Full Analysis */}
-        <div className="flex items-center gap-1.5 pt-1">
+        {/* Actions: Focus Cam / 3D Surface Patch / Full Analysis */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-1">
           <button
             type="button"
             onClick={() => flyToSite(selectedSite)}
-            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.16] rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-white transition"
+            className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.16] rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-white transition whitespace-nowrap"
           >
             <Focus className="w-3 h-3" />
             <span>FOCUS CAM</span>
+          </button>
+          <button
+            type="button"
+            data-testid="open-local-surface-hud-btn"
+            onClick={() => setIsLocalSurfaceOpen(true)}
+            className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-[#12141A] hover:bg-white/15 border border-white/30 rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-white transition whitespace-nowrap"
+            title="Inspect 2.4 km × 2.4 km local meter-scale 3D surface DEM"
+          >
+            <Layers className="w-3 h-3" />
+            <span>3D SURFACE PATCH</span>
           </button>
           {onOpenTelemetryDrawer && (
             <button
               type="button"
               onClick={onOpenTelemetryDrawer}
-              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-white hover:bg-neutral-200 rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-black transition"
+              className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-white hover:bg-neutral-200 rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-black transition"
             >
               <BarChart3 className="w-3 h-3" />
               <span>FULL ANALYSIS</span>
@@ -2386,11 +2438,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
               <button
                 type="button"
                 onClick={() => onChangeDateOffset(0)}
-                className={`px-1.5 py-0.5 border border-white/[0.12] rounded-[2px] text-[9px] transition ${
-                  Math.abs(sunIlluminationOffset) < 0.02
-                    ? 'bg-white text-black font-bold'
-                    : 'bg-[#12141A] hover:bg-white/15 text-[#9CA3AF] hover:text-white'
-                }`}
+                className={`px-1.5 py-0.5 border border-white/[0.12] rounded-[2px] text-[9px] transition ${Math.abs(sunIlluminationOffset) < 0.02
+                  ? 'bg-white text-black font-bold'
+                  : 'bg-[#12141A] hover:bg-white/15 text-[#9CA3AF] hover:text-white'
+                  }`}
               >
                 T0
               </button>
@@ -2410,11 +2461,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
               </button>
             </div>
             <span
-              className={`px-1.5 py-0.5 rounded-[2px] border text-[9px] font-bold tabular-nums ${
-                selectedSolarTelemetry.isSunlit
-                  ? 'border-[#10B981]/50 text-[#10B981] bg-[#10B981]/10'
-                  : 'border-[#EF4444]/50 text-[#EF4444] bg-[#EF4444]/10'
-              }`}
+              className={`px-1.5 py-0.5 rounded-[2px] border text-[9px] font-bold tabular-nums ${selectedSolarTelemetry.isSunlit
+                ? 'border-[#10B981]/50 text-[#10B981] bg-[#10B981]/10'
+                : 'border-[#EF4444]/50 text-[#EF4444] bg-[#EF4444]/10'
+                }`}
             >
               SUN {selectedSolarTelemetry.effectiveSunElevDeg >= 0 ? '+' : ''}
               {selectedSolarTelemetry.effectiveSunElevDeg.toFixed(1)}° ·{' '}
@@ -2430,6 +2480,21 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           <span>ELEV {selectedSite.coordinates.elevation_m}M</span>
         </div>
       </div>
+
+      {/* High-Resolution 2.4 km × 2.4 km Local 3D Surface DEM Inspector */}
+      {isLocalSurfaceOpen && (
+        <LocalSurfaceDetailView
+          site={selectedSite}
+          lander={lander}
+          sunIlluminationOffset={sunIlluminationOffset}
+          showAssessmentOverlay={showAssessmentOverlay}
+          overlayOpacity={overlayOpacity}
+          leftDrawerOpen={leftDrawerOpen}
+          rightDrawerOpen={rightDrawerOpen}
+          onClose={() => setIsLocalSurfaceOpen(false)}
+          onOpenTelemetryDrawer={onOpenTelemetryDrawer}
+        />
+      )}
     </div>
   );
 };
