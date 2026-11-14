@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { CANDIDATE_SITES } from './data/candidateSites';
 import { assessLandingSiteRisk } from './engine/riskEngine';
 import { CandidateSite } from './types';
+import { LunarGlobe } from './components/LunarGlobe';
 import { ShieldCheck, AlertTriangle, XCircle, Compass, Sun, Radio, Activity, Moon } from 'lucide-react';
 
 export default function App() {
@@ -134,6 +135,14 @@ export default function App() {
         {/* Right Column: Deep Risk Factor Inspector */}
         <section className="lg:col-span-8 flex flex-col gap-5">
           
+          {/* Interactive 3D/2.5D Lunar Globe Viewport */}
+          <LunarGlobe 
+            sites={CANDIDATE_SITES} 
+            selectedSite={selectedSite} 
+            onSelectSite={setSelectedSite} 
+            sunIlluminationOffset={simulatedDateOffset}
+          />
+
           {/* Top Banner: Site Status Summary */}
           <div className="bg-space-900 border border-slate-800 rounded-xl p-6 shadow-xl relative overflow-hidden">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
