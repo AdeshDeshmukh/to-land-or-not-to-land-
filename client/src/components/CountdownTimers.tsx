@@ -1,6 +1,10 @@
 import React from 'react';
 import { CandidateSite, LanderProfile } from '../types';
 import { Term } from './Glossary';
+import {
+  computeSolarTelemetryAtTime,
+  computeEarthTelemetryAtTime,
+} from '../utils/lunarTelemetry';
 import { 
   Sun, 
   Radio, 
@@ -30,48 +34,38 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
 }) => {
   const activeParams = parameters || lander;
   const minIllum = activeParams?.minIlluminationPct ?? 30;
-  const isSouthPole = site.coordinates.latitude < -80;
-  const maxSunAngle = isSouthPole ? 3.8 : 75.0;
+  const { latitude, longitude } = site.coordinates;
 
-  // Current Sun elevation angle relative to local horizon
-  const currentSunAngle = Math.sin((simulatedDateOffset * 2 * Math.PI) / 29.5) * maxSunAngle + (isSouthPole ? 0.8 : 35);
-  const isSunlit = currentSunAngle > 0.3 && computedIllumination >= minIllum;
+  // Compute exact 3D sun & Earth horizon elevation aligned with globe shadows and plotter
+  const currentSolar = computeSolarTelemetryAtTime(latitude, longitude, simulatedDateOffset, site);
+  const currentEarth = computeEarthTelemetryAtTime(latitude, longitude, simulatedDateOffset, site);
+  const isSunlit = currentSolar.isSunlit && computedIllumination >= minIllum * 0.5;
 
-  // Calculate forward trajectory to find time to sunset / sunrise
-  // Scan ahead up to 29.5 days (one full synodic month) in 0.1 day increments
-  let hoursUntilSunset = 0;
-  let hoursUntilSunrise = 0;
+  // Scan ahead/back across one full 29.53d synodic cycle in 6-hour (0.25d) steps
+  let hoursUntilSunset = 708;
+  let hoursUntilSunrise = 708;
   let shadowDurationHours = 0;
 
   if (isSunlit) {
-    // Currently illuminated: find how many hours until sunAngle drops below threshold
-    for (let t = 0.1; t <= 29.5; t += 0.1) {
-      const futureOffset = simulatedDateOffset + t;
-      const angle = Math.sin((futureOffset * 2 * Math.PI) / 29.5) * maxSunAngle + (isSouthPole ? 0.8 : 35);
-      const illum = Math.max(5, Math.min(100, Math.round(site.defaultIlluminationPct + Math.sin(futureOffset * 0.4) * 25)));
-      if (angle <= 0.3 || illum < minIllum) {
+    for (let t = 0.25; t <= 29.5; t += 0.25) {
+      const futureSolar = computeSolarTelemetryAtTime(latitude, longitude, simulatedDateOffset + t, site);
+      if (!futureSolar.isSunlit || futureSolar.illuminationPct < minIllum * 0.5) {
         hoursUntilSunset = Math.round(t * 24);
         break;
       }
     }
   } else {
-    // Currently in shadow: find how many hours until sunrise
-    for (let t = 0.1; t <= 29.5; t += 0.1) {
-      const futureOffset = simulatedDateOffset + t;
-      const angle = Math.sin((futureOffset * 2 * Math.PI) / 29.5) * maxSunAngle + (isSouthPole ? 0.8 : 35);
-      const illum = Math.max(5, Math.min(100, Math.round(site.defaultIlluminationPct + Math.sin(futureOffset * 0.4) * 25)));
-      if (angle > 0.3 && illum >= minIllum) {
+    for (let t = 0.25; t <= 29.5; t += 0.25) {
+      const futureSolar = computeSolarTelemetryAtTime(latitude, longitude, simulatedDateOffset + t, site);
+      if (futureSolar.isSunlit && futureSolar.illuminationPct >= minIllum * 0.5) {
         hoursUntilSunrise = Math.round(t * 24);
         break;
       }
     }
 
-    // Estimate how many hours site has been in shadow looking backwards
-    for (let t = 0.1; t <= 14; t += 0.1) {
-      const pastOffset = simulatedDateOffset - t;
-      const angle = Math.sin((pastOffset * 2 * Math.PI) / 29.5) * maxSunAngle + (isSouthPole ? 0.8 : 35);
-      const illum = Math.max(5, Math.min(100, Math.round(site.defaultIlluminationPct + Math.sin(pastOffset * 0.4) * 25)));
-      if (angle > 0.3 && illum >= minIllum) {
+    for (let t = 0.25; t <= 14.75; t += 0.25) {
+      const pastSolar = computeSolarTelemetryAtTime(latitude, longitude, simulatedDateOffset - t, site);
+      if (pastSolar.isSunlit && pastSolar.illuminationPct >= minIllum * 0.5) {
         shadowDurationHours = Math.round(t * 24);
         break;
       }
@@ -80,17 +74,13 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
   }
 
   // Earth Line of Sight and Comms Window
-  const earthAngle = site.defaultEarthLos
-    ? 12.5 + Math.sin(simulatedDateOffset * 0.4) * 4.2
-    : -8.0 + Math.sin(simulatedDateOffset * 0.4) * 2.0;
-  const isCommsLocked = earthAngle > 0.0 && site.defaultEarthLos;
+  const isCommsLocked = currentEarth.hasLos;
 
   let commsRemainingHours = 0;
   if (isCommsLocked) {
-    for (let t = 0.1; t <= 20; t += 0.1) {
-      const futureOffset = simulatedDateOffset + t;
-      const angle = 12.5 + Math.sin(futureOffset * 0.4) * 4.2;
-      if (angle <= 0.0) {
+    for (let t = 0.25; t <= 20; t += 0.25) {
+      const futureEarth = computeEarthTelemetryAtTime(latitude, longitude, simulatedDateOffset + t, site);
+      if (!futureEarth.hasLos) {
         commsRemainingHours = Math.round(t * 24);
         break;
       }

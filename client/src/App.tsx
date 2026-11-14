@@ -1,7 +1,13 @@
 import { useState, useEffect } from 'react';
 import { CANDIDATE_SITES } from './data/candidateSites';
 import { assessLandingSiteRisk } from './engine/riskEngine';
-import { computeSiteIllumination, computeSiteEarthLos } from './utils/lunarTelemetry';
+import { 
+  computeSiteIllumination, 
+  computeSiteEarthLos,
+  estimateLunarTerrain,
+  formatMissionUtc,
+  parseMissionUtcInputs,
+} from './utils/lunarTelemetry';
 import { CandidateSite, LanderProfile } from './types';
 import { LunarGlobe3D } from './components/LunarGlobe3D';
 import { LandingParametersPanel, DEFAULT_MISSION_PARAMETERS } from './components/LandingParametersPanel';
@@ -29,7 +35,9 @@ import {
   Flame,
   Activity,
   Scale,
-  GraduationCap
+  GraduationCap,
+  Crosshair,
+  Clock
 } from 'lucide-react';
 
 // Maps engine factor names to glossary terms (used for Educator-mode tooltips)
@@ -41,12 +49,49 @@ const FACTOR_TERM: Record<string, GlossaryKey> = {
 };
 
 export default function App() {
-  const [allSites] = useState<CandidateSite[]>(CANDIDATE_SITES);
+  const [allSites, setAllSites] = useState<CandidateSite[]>(CANDIDATE_SITES);
   const [landingParams, setLandingParams] = useState<LanderProfile>(DEFAULT_MISSION_PARAMETERS);
   const [selectedSite, setSelectedSite] = useState<CandidateSite>(CANDIDATE_SITES[0]);
   const [simulatedDateOffset, setSimulatedDateOffset] = useState<number>(0);
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
+  const [customLatInput, setCustomLatInput] = useState<string>('-89.54');
+  const [customLonInput, setCustomLonInput] = useState<string>('0.00');
+  const [customNameInput, setCustomNameInput] = useState<string>('');
+  const [customCoordError, setCustomCoordError] = useState<string>('');
+
+  const missionUtc = formatMissionUtc(simulatedDateOffset);
+
+  const handleDeployCustomCoordinates = (lat: number, lon: number, customName?: string) => {
+    const newSite = estimateLunarTerrain(Number(lat.toFixed(2)), Number(lon.toFixed(2)), customName);
+    setAllSites((prev) => {
+      // Keep the 5 canonical sites + up to 6 most recent custom targets
+      const presets = prev.slice(0, CANDIDATE_SITES.length);
+      const custom = prev.slice(CANDIDATE_SITES.length).slice(-5);
+      return [...presets, ...custom, newSite];
+    });
+    setSelectedSite(newSite);
+    setCustomLatInput(newSite.coordinates.latitude.toFixed(2));
+    setCustomLonInput(newSite.coordinates.longitude.toFixed(2));
+    setCustomNameInput('');
+    setCustomCoordError('');
+    setIsRightDrawerOpen(true);
+  };
+
+  const handleSubmitDrawerCoordinates = (e: React.FormEvent) => {
+    e.preventDefault();
+    const lat = Number(customLatInput);
+    const lon = Number(customLonInput);
+    if (!Number.isFinite(lat) || lat < -90 || lat > 90) {
+      setCustomCoordError('Latitude must be between -90° and +90°.');
+      return;
+    }
+    if (!Number.isFinite(lon) || lon < -180 || lon > 180) {
+      setCustomCoordError('Longitude must be between -180° and +180°.');
+      return;
+    }
+    handleDeployCustomCoordinates(lat, lon, customNameInput.trim() || undefined);
+  };
 
   // Left & Right drawer toggles for clean, centered map experience
   const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState<boolean>(false);
@@ -173,6 +218,11 @@ export default function App() {
             }} 
             sunIlluminationOffset={simulatedDateOffset}
             lander={landingParams}
+            onProbeCoordinate={handleDeployCustomCoordinates}
+            onChangeDateOffset={(offset) => {
+              setIsPlaying(false);
+              setSimulatedDateOffset(offset);
+            }}
             leftDrawerOpen={isLeftDrawerOpen}
             rightDrawerOpen={isRightDrawerOpen}
           />
@@ -247,6 +297,79 @@ export default function App() {
             </div>
           </div>
 
+          {/* 1b. Custom Target Coordinate Input (Lat / Lon) */}
+          <form
+            onSubmit={handleSubmitDrawerCoordinates}
+            className="bg-[#090A0D] border border-white/[0.14] rounded-[2px] p-3.5 space-y-2.5"
+          >
+            <div className="flex items-center justify-between border-b border-white/[0.1] pb-2">
+              <h3 className="text-[11px] font-bold text-white flex items-center gap-1.5 font-mono uppercase tracking-wider">
+                <Crosshair className="w-3.5 h-3.5 text-[#9CA3AF]" /> Target Coordinate Entry
+              </h3>
+              <span className="text-[9px] font-mono text-[#6B7280] uppercase">DEG (LOLA)</span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label htmlFor="drawer-coord-lat" className="block text-[9px] font-mono text-[#9CA3AF] uppercase tracking-wider mb-1">
+                  Latitude (-90..90)
+                </label>
+                <input
+                  id="drawer-coord-lat"
+                  type="number"
+                  step="0.01"
+                  min={-90}
+                  max={90}
+                  value={customLatInput}
+                  onChange={(e) => setCustomLatInput(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-black border border-white/[0.14] rounded-[2px] text-xs font-mono text-white tabular-nums focus:outline-none focus:border-white/50"
+                />
+              </div>
+              <div>
+                <label htmlFor="drawer-coord-lon" className="block text-[9px] font-mono text-[#9CA3AF] uppercase tracking-wider mb-1">
+                  Longitude (-180..180)
+                </label>
+                <input
+                  id="drawer-coord-lon"
+                  type="number"
+                  step="0.01"
+                  min={-180}
+                  max={180}
+                  value={customLonInput}
+                  onChange={(e) => setCustomLonInput(e.target.value)}
+                  className="w-full px-2 py-1.5 bg-black border border-white/[0.14] rounded-[2px] text-xs font-mono text-white tabular-nums focus:outline-none focus:border-white/50"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label htmlFor="drawer-coord-name" className="block text-[9px] font-mono text-[#9CA3AF] uppercase tracking-wider mb-1">
+                Site Designation (Optional)
+              </label>
+              <input
+                id="drawer-coord-name"
+                type="text"
+                placeholder="E.G. SHACKLETON FLOOR / CABEUS RIM"
+                value={customNameInput}
+                onChange={(e) => setCustomNameInput(e.target.value)}
+                className="w-full px-2 py-1.5 bg-black border border-white/[0.14] rounded-[2px] text-[10px] font-mono text-white uppercase tracking-wider placeholder:text-[#4B5563] focus:outline-none focus:border-white/50"
+              />
+            </div>
+
+            {customCoordError && (
+              <div className="text-[10px] font-mono text-[#EF4444]">
+                {customCoordError}
+              </div>
+            )}
+
+            <button
+              type="submit"
+              className="w-full py-1.5 rounded-[2px] bg-white text-black hover:bg-neutral-200 font-mono text-[10px] font-bold uppercase tracking-widest transition"
+            >
+              Evaluate &amp; Deploy Coordinate
+            </button>
+          </form>
+
           {/* 2. Landing Safety Parameters Panel */}
           <LandingParametersPanel 
             parameters={landingParams} 
@@ -262,6 +385,64 @@ export default function App() {
               <span className="text-[10px] font-mono px-2 py-0.5 rounded-[2px] bg-black text-white border border-white/[0.14] tabular-nums">
                 T {simulatedDateOffset >= 0 ? `+${simulatedDateOffset.toFixed(1)}` : simulatedDateOffset.toFixed(1)}d
               </span>
+            </div>
+
+            {/* Explicit Mission UTC Date & Time Picker */}
+            <div className="bg-black border border-white/[0.14] rounded-[2px] p-2.5 space-y-2">
+              <div className="flex items-center justify-between text-[9px] font-mono uppercase tracking-wider text-[#9CA3AF]">
+                <span className="flex items-center gap-1">
+                  <Clock className="w-3 h-3 text-white" /> Mission Epoch UTC
+                </span>
+                <span className="text-white font-semibold tabular-nums">{missionUtc.fullUtc}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  aria-label="Simulation UTC Date"
+                  type="date"
+                  value={missionUtc.dateStr}
+                  onChange={(e) => {
+                    const nextOffset = parseMissionUtcInputs(e.target.value, missionUtc.timeStr);
+                    if (nextOffset !== null) {
+                      setIsPlaying(false);
+                      setSimulatedDateOffset(nextOffset);
+                    }
+                  }}
+                  className="px-2 py-1 bg-[#090A0D] border border-white/[0.14] rounded-[2px] text-[10px] font-mono text-white tabular-nums [color-scheme:dark] focus:outline-none focus:border-white/50"
+                />
+                <input
+                  aria-label="Simulation UTC Time"
+                  type="time"
+                  value={missionUtc.timeStr}
+                  onChange={(e) => {
+                    const nextOffset = parseMissionUtcInputs(missionUtc.dateStr, e.target.value);
+                    if (nextOffset !== null) {
+                      setIsPlaying(false);
+                      setSimulatedDateOffset(nextOffset);
+                    }
+                  }}
+                  className="px-2 py-1 bg-[#090A0D] border border-white/[0.14] rounded-[2px] text-[10px] font-mono text-white tabular-nums [color-scheme:dark] focus:outline-none focus:border-white/50"
+                />
+              </div>
+              <div className="grid grid-cols-4 gap-1">
+                {[
+                  { label: '-1d', delta: -1 },
+                  { label: '-6h', delta: -0.25 },
+                  { label: '+6h', delta: 0.25 },
+                  { label: '+1d', delta: 1 },
+                ].map((step) => (
+                  <button
+                    key={step.label}
+                    type="button"
+                    onClick={() => {
+                      setIsPlaying(false);
+                      setSimulatedDateOffset((prev) => Math.max(-14.77, Math.min(14.77, prev + step.delta)));
+                    }}
+                    className="py-1 rounded-[2px] bg-[#12141A] hover:bg-white/15 border border-white/[0.12] text-[9px] font-mono uppercase text-[#9CA3AF] hover:text-white transition"
+                  >
+                    {step.label}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Play/Pause & Speed Controller */}
