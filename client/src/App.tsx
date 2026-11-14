@@ -1,10 +1,9 @@
 import { useState, useEffect } from 'react';
 import { CANDIDATE_SITES } from './data/candidateSites';
-import { DEFAULT_LANDER_PROFILES } from './data/landerProfiles';
 import { assessLandingSiteRisk } from './engine/riskEngine';
 import { CandidateSite, LanderProfile } from './types';
 import { LunarGlobe3D } from './components/LunarGlobe3D';
-import { LanderSelector } from './components/LanderSelector';
+import { LandingParametersPanel, DEFAULT_MISSION_PARAMETERS } from './components/LandingParametersPanel';
 import { CustomProbeModal } from './components/CustomProbeModal';
 import { Starfield } from './components/Starfield';
 import { HorizonPlot } from './components/HorizonPlot';
@@ -31,7 +30,7 @@ import {
 
 export default function App() {
   const [allSites, setAllSites] = useState<CandidateSite[]>(CANDIDATE_SITES);
-  const [selectedLander, setSelectedLander] = useState<LanderProfile>(DEFAULT_LANDER_PROFILES[0]);
+  const [landingParams, setLandingParams] = useState<LanderProfile>(DEFAULT_MISSION_PARAMETERS);
   const [selectedSite, setSelectedSite] = useState<CandidateSite>(CANDIDATE_SITES[0]);
   const [simulatedDateOffset, setSimulatedDateOffset] = useState<number>(0); // Days offset
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -86,7 +85,7 @@ export default function App() {
     selectedSite, 
     computedIllumination, 
     selectedSite.defaultEarthLos, 
-    selectedLander
+    landingParams
   );
 
   const getStatusBadge = (status: 'GREEN' | 'YELLOW' | 'RED') => {
@@ -171,10 +170,10 @@ export default function App() {
         {/* Left Column: Vehicle & Site Selector */}
         <section className="lg:col-span-4 flex flex-col gap-4">
           
-          {/* Lander Architecture Selector */}
-          <LanderSelector 
-            selectedLander={selectedLander} 
-            onSelectLander={setSelectedLander} 
+          {/* Landing Safety Constraints & Parameters Panel */}
+          <LandingParametersPanel 
+            parameters={landingParams} 
+            onChange={setLandingParams} 
           />
 
           <div className="bg-space-900 border border-slate-800 rounded-xl p-5 shadow-lg">
@@ -194,7 +193,7 @@ export default function App() {
             </div>
             <div className="space-y-2">
               {allSites.map((site) => {
-                const siteRisk = assessLandingSiteRisk(site, undefined, undefined, selectedLander);
+                const siteRisk = assessLandingSiteRisk(site, undefined, undefined, landingParams);
                 const isSelected = site.id === selectedSite.id;
                 return (
                   <button
@@ -342,7 +341,7 @@ export default function App() {
             selectedSite={selectedSite} 
             onSelectSite={setSelectedSite} 
             sunIlluminationOffset={simulatedDateOffset}
-            lander={selectedLander}
+            lander={landingParams}
             onProbeCoordinate={handleProbeCoordinate}
           />
 
@@ -366,7 +365,7 @@ export default function App() {
                 <span>Assessment Summary: {assessment.overall_reason}</span>
               </div>
               <span className="text-[10px] text-cyan-300 bg-cyan-950/40 border border-cyan-500/30 px-2 py-0.5 rounded shrink-0 self-start sm:self-auto">
-                Profile: {selectedLander.name}
+                Criteria: Max {landingParams.maxSlopeDeg}° Slope, Min {landingParams.minIlluminationPct}% Sun
               </span>
             </div>
           </div>
@@ -411,7 +410,7 @@ export default function App() {
             site={selectedSite}
             simulatedDateOffset={simulatedDateOffset}
             computedIllumination={computedIllumination}
-            lander={selectedLander}
+            lander={landingParams}
           />
 
           {/* Telemetry Bar */}
@@ -440,7 +439,7 @@ export default function App() {
         isOpen={isComparisonOpen}
         onClose={() => setIsComparisonOpen(false)}
         onSelectSite={setSelectedSite}
-        lander={selectedLander}
+        lander={landingParams}
       />
 
       {/* Custom Coordinate Probe Modal */}
@@ -448,7 +447,7 @@ export default function App() {
         isOpen={isProbeModalOpen}
         onClose={() => setIsProbeModalOpen(false)}
         onAddCustomSite={handleAddCustomSite}
-        selectedLander={selectedLander}
+        selectedLander={landingParams}
         initialLat={probeCoords.lat}
         initialLon={probeCoords.lon}
       />
