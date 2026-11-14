@@ -410,7 +410,7 @@ export default function App() {
             site={selectedSite}
             simulatedDateOffset={simulatedDateOffset}
             computedIllumination={computedIllumination}
-            lander={selectedLander}
+            lander={landingParams}
           />
 
           {/* Telemetry Bar */}
