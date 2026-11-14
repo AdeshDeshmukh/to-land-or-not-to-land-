@@ -38,14 +38,14 @@ export const PlainEnglishSummary: React.FC<PlainEnglishSummaryProps> = ({
   ];
 
   return (
-    <div className="bg-cyan-950/30 border border-cyan-500/30 rounded-xl p-3.5 space-y-2">
-      <div className="flex items-center gap-2 text-cyan-300 text-xs font-bold font-mono uppercase tracking-wider">
-        <GraduationCap className="w-4 h-4" /> In plain English
+    <div className="bg-black border border-white/25 rounded-[2px] p-3.5 space-y-2">
+      <div className="flex items-center gap-2 text-white text-[10px] font-bold font-mono uppercase tracking-wider">
+        <GraduationCap className="w-3.5 h-3.5 text-[#9CA3AF]" /> In plain English
       </div>
-      <p className="text-sm font-semibold text-white leading-snug">
+      <p className="text-xs font-semibold text-white leading-snug">
         {site.name} {VERDICT[assessment.overall_status]}
       </p>
-      <ul className="space-y-1.5 text-xs text-slate-300 leading-relaxed list-disc pl-4">
+      <ul className="space-y-1.5 text-xs text-[#9CA3AF] leading-relaxed list-disc pl-4">
         {lines.map((line) => (
           <li key={line}>{line}</li>
         ))}

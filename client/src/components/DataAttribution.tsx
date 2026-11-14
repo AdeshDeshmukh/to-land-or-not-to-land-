@@ -8,10 +8,6 @@ interface Source {
   title: string;
 }
 
-/**
- * Each badge states exactly what the data is used for and whether the app shows
- * measured NASA data or a simplified model, so judges never have to guess.
- */
 const SOURCES: Source[] = [
   {
     name: 'NASA LRO LROC',
@@ -24,7 +20,7 @@ const SOURCES: Source[] = [
     detail: 'elevation & slope',
     kind: 'data',
     title:
-      'Globe relief and slope overlay derived from the LOLA digital elevation model (NASA SVS 4720). Global grid is coarse, so overlay shows regional slope.',
+      'Globe relief and dynamic RYG overlay derived from the LOLA digital elevation model (NASA SVS 4720).',
   },
   {
     name: 'JPL Horizons',
@@ -36,27 +32,29 @@ const SOURCES: Source[] = [
 ];
 
 export const DataAttribution: React.FC = () => (
-  <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono">
-    <span className="text-slate-500 uppercase tracking-wider mr-0.5">Data</span>
+  <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono uppercase tracking-wider">
+    <span className="text-[#6B7280] mr-0.5">DATA</span>
     {SOURCES.map((s) => (
       <span
         key={s.name}
         title={s.title}
-        className="flex items-center gap-1.5 rounded-md border border-slate-700/80 bg-space-900/80 px-2 py-0.5 text-slate-300 cursor-help"
+        className="flex items-center gap-1.5 rounded-[2px] border border-white/[0.14] bg-black px-2 py-0.5 text-[#9CA3AF] cursor-help"
       >
         {s.kind === 'data' ? (
-          <Database className="w-3 h-3 text-cyan-400" />
+          <Database className="w-3 h-3 text-white" />
         ) : (
-          <FlaskConical className="w-3 h-3 text-amber-400" />
+          <FlaskConical className="w-3 h-3 text-[#F59E0B]" />
         )}
-        <span className="font-semibold text-slate-100">{s.name}</span>
-        <span className="text-slate-400">{s.detail}</span>
+        <span className="font-semibold text-white">{s.name}</span>
+        <span className="text-[#6B7280] lowercase tracking-normal">{s.detail}</span>
         <span
-          className={`rounded px-1 py-px text-[9px] font-bold uppercase ${
-            s.kind === 'data' ? 'bg-cyan-500/15 text-cyan-300' : 'bg-amber-500/15 text-amber-300'
+          className={`rounded-[2px] px-1 py-px text-[9px] font-bold uppercase border ${
+            s.kind === 'data'
+              ? 'bg-white/[0.08] text-white border-white/20'
+              : 'bg-[#F59E0B]/10 text-[#F59E0B] border-[#F59E0B]/35'
           }`}
         >
-          {s.kind === 'data' ? 'NASA data' : 'Modeled'}
+          {s.kind === 'data' ? 'NASA DATA' : 'MODELED'}
         </span>
       </span>
     ))}

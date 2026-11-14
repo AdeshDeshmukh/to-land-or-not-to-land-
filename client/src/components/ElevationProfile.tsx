@@ -131,38 +131,38 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
   const lzWidth = lzRightX - lzLeftX;
 
   return (
-    <div className="bg-space-900 border border-slate-800 rounded-xl p-5 shadow-xl backdrop-blur-md space-y-3.5">
+    <div className="bg-[#090A0D] border border-white/[0.14] rounded-[2px] p-5 space-y-3.5">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800/80 pb-3">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-white/[0.14] pb-3">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+          <div className="w-8 h-8 rounded-[2px] bg-black border border-white/[0.14] flex items-center justify-center text-white">
             <Mountain className="w-4 h-4" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-white tracking-tight flex items-center gap-2">
+            <h3 className="text-xs font-mono uppercase tracking-wider font-semibold text-white flex items-center gap-2">
               Topographic Elevation Profile
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 text-cyan-300 border border-slate-700">
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded-[2px] bg-black text-[#9CA3AF] border border-white/[0.14]">
                 2 KM FOOTPRINT
               </span>
             </h3>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-[#9CA3AF]">
               High-resolution LOLA altimetry cross-section across landing ellipse (-1,000 m to +1,000 m).
             </p>
           </div>
         </div>
 
         {/* Legend */}
-        <div className="flex items-center gap-3 text-xs font-mono">
-          <div className="flex items-center gap-1.5 text-emerald-400">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/30 border border-emerald-400"></span>
+        <div className="flex items-center gap-3 text-[11px] font-mono">
+          <div className="flex items-center gap-1.5 text-[#10B981]">
+            <span className="w-2 h-2 rounded-[1px] bg-[#10B981]/30 border border-[#10B981]"></span>
             &lt;5° Safe
           </div>
-          <div className="flex items-center gap-1.5 text-amber-400">
-            <span className="w-2.5 h-2.5 rounded-full bg-amber-500/30 border border-amber-400"></span>
+          <div className="flex items-center gap-1.5 text-[#F59E0B]">
+            <span className="w-2 h-2 rounded-[1px] bg-[#F59E0B]/30 border border-[#F59E0B]"></span>
             5°–15° Caution
           </div>
-          <div className="flex items-center gap-1.5 text-rose-400">
-            <span className="w-2.5 h-2.5 rounded-full bg-rose-500/30 border border-rose-400"></span>
+          <div className="flex items-center gap-1.5 text-[#EF4444]">
+            <span className="w-2 h-2 rounded-[1px] bg-[#EF4444]/30 border border-[#EF4444]"></span>
             &gt;15° Hazard
           </div>
         </div>
@@ -170,34 +170,34 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
 
       {/* Topographic Quick Metrics Bar */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs font-mono">
-        <div className="bg-space-950/70 p-2.5 rounded-lg border border-slate-800/80">
-          <span className="text-slate-400 text-[10px] uppercase block">Center Altitude</span>
+        <div className="bg-black p-2.5 rounded-[2px] border border-white/[0.14]">
+          <span className="text-[#6B7280] text-[10px] uppercase tracking-wider block">Center Altitude</span>
           <span className="text-white font-bold text-sm">
             {landingZonePoint ? `${landingZonePoint.elevationMeters} m` : 'N/A'}
           </span>
         </div>
-        <div className="bg-space-950/70 p-2.5 rounded-lg border border-slate-800/80">
-          <span className="text-slate-400 text-[10px] uppercase block">Target Gradient</span>
-          <span className={`font-bold text-sm ${site.terrain.slope_deg < 5 ? 'text-emerald-400' : site.terrain.slope_deg < 15 ? 'text-amber-400' : 'text-rose-400'}`}>
+        <div className="bg-black p-2.5 rounded-[2px] border border-white/[0.14]">
+          <span className="text-[#6B7280] text-[10px] uppercase tracking-wider block">Target Gradient</span>
+          <span className={`font-bold text-sm ${site.terrain.slope_deg < 5 ? 'text-[#10B981]' : site.terrain.slope_deg < 15 ? 'text-[#F59E0B]' : 'text-[#EF4444]'}`}>
             {site.terrain.slope_deg.toFixed(1)}°
           </span>
         </div>
-        <div className="bg-space-950/70 p-2.5 rounded-lg border border-slate-800/80">
-          <span className="text-slate-400 text-[10px] uppercase block">Max Profile Slope</span>
-          <span className={`font-bold text-sm ${maxProfileSlope > 15 ? 'text-rose-400' : maxProfileSlope > 5 ? 'text-amber-400' : 'text-emerald-400'}`}>
+        <div className="bg-black p-2.5 rounded-[2px] border border-white/[0.14]">
+          <span className="text-[#6B7280] text-[10px] uppercase tracking-wider block">Max Profile Slope</span>
+          <span className={`font-bold text-sm ${maxProfileSlope > 15 ? 'text-[#EF4444]' : maxProfileSlope > 5 ? 'text-[#F59E0B]' : 'text-[#10B981]'}`}>
             {maxProfileSlope.toFixed(1)}°
           </span>
         </div>
-        <div className="bg-space-950/70 p-2.5 rounded-lg border border-slate-800/80">
-          <span className="text-slate-400 text-[10px] uppercase block">Relief Differential</span>
-          <span className="text-cyan-300 font-bold text-sm">
+        <div className="bg-black p-2.5 rounded-[2px] border border-white/[0.14]">
+          <span className="text-[#6B7280] text-[10px] uppercase tracking-wider block">Relief Differential</span>
+          <span className="text-white font-bold text-sm">
             Δ {Math.round(elevRange)} m
           </span>
         </div>
       </div>
 
       {/* Interactive SVG Cross-Section Graph */}
-      <div className="relative w-full overflow-x-auto bg-space-950/80 rounded-xl border border-slate-800 p-2 select-none">
+      <div className="relative w-full overflow-x-auto bg-black rounded-[2px] border border-white/[0.14] p-2 select-none">
         <svg 
           viewBox={`0 0 ${svgWidth} ${svgHeight}`} 
           className="w-full h-auto max-h-[220px]"
@@ -206,14 +206,14 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
           <defs>
             {/* Terrain Fill Gradient */}
             <linearGradient id="terrainGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.25" />
-              <stop offset="100%" stopColor="#06b6d4" stopOpacity="0.02" />
+              <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.20" />
+              <stop offset="100%" stopColor="#FFFFFF" stopOpacity="0.02" />
             </linearGradient>
 
             {/* Target Landing Zone Safe Strip */}
             <linearGradient id="lzGrad" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#10b981" stopOpacity="0.20" />
-              <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
+              <stop offset="0%" stopColor="#10B981" stopOpacity="0.18" />
+              <stop offset="100%" stopColor="#10B981" stopOpacity="0.02" />
             </linearGradient>
           </defs>
 
@@ -228,14 +228,13 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
                   y1={y} 
                   x2={svgWidth - padRight} 
                   y2={y} 
-                  stroke="#334155" 
+                  stroke="rgba(255, 255, 255, 0.12)" 
                   strokeDasharray="3 3" 
-                  strokeOpacity="0.35" 
                 />
                 <text 
                   x={padLeft - 8} 
                   y={y + 3} 
-                  fill="#64748b" 
+                  fill="#6B7280" 
                   fontSize="9" 
                   textAnchor="end" 
                   fontFamily="monospace"
@@ -253,10 +252,10 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
             width={lzWidth}
             height={plotHeight}
             fill="url(#lzGrad)"
-            stroke="#10b981"
+            stroke="#10B981"
             strokeWidth="1"
             strokeDasharray="4 2"
-            strokeOpacity="0.4"
+            strokeOpacity="0.45"
           />
 
           {/* Terrain Area Fill */}
@@ -266,19 +265,19 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
           <path 
             d={pathD} 
             fill="none" 
-            stroke="#38bdf8" 
-            strokeWidth="2.5" 
+            stroke="#FFFFFF" 
+            strokeWidth="2" 
             strokeLinecap="round" 
             strokeLinejoin="round" 
           />
 
           {/* Target Zone Top Bracket & Label */}
           <g transform={`translate(${getX(0)}, ${padTop + 14})`}>
-            <circle cx="0" cy="0" r="3" fill="#10b981" />
+            <circle cx="0" cy="0" r="3" fill="#10B981" />
             <text 
               x="0" 
               y="-6" 
-              fill="#10b981" 
+              fill="#10B981" 
               fontSize="9" 
               fontWeight="bold" 
               textAnchor="middle" 
@@ -298,12 +297,12 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
                   y1={padTop + plotHeight} 
                   x2={x} 
                   y2={padTop + plotHeight + 5} 
-                  stroke="#475569" 
+                  stroke="rgba(255, 255, 255, 0.25)" 
                 />
                 <text 
                   x={x} 
                   y={padTop + plotHeight + 17} 
-                  fill="#94a3b8" 
+                  fill="#9CA3AF" 
                   fontSize="9" 
                   textAnchor="middle" 
                   fontFamily="monospace"
@@ -340,16 +339,16 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
                 y1={padTop}
                 x2={getX(hoveredPoint.distMeters)}
                 y2={padTop + plotHeight}
-                stroke="#f59e0b"
+                stroke="#F59E0B"
                 strokeWidth="1.5"
                 strokeDasharray="2 2"
               />
               <circle
                 cx={getX(hoveredPoint.distMeters)}
                 cy={getY(hoveredPoint.elevationMeters)}
-                r="4.5"
-                fill="#f59e0b"
-                stroke="#0f172a"
+                r="4"
+                fill="#F59E0B"
+                stroke="#000000"
                 strokeWidth="1.5"
               />
             </g>
@@ -359,22 +358,22 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
         {/* Live Hover Tooltip Panel */}
         {hoveredPoint && (
           <div 
-            className="absolute top-3 left-16 z-30 bg-space-900/95 border border-amber-500/40 rounded-lg px-3 py-1.5 shadow-2xl text-xs font-mono pointer-events-none flex items-center gap-3 backdrop-blur-md animate-fadeIn"
+            className="absolute top-3 left-16 z-30 bg-[#090A0D]/95 border border-white/25 rounded-[2px] px-3 py-1.5 shadow-2xl text-xs font-mono pointer-events-none flex items-center gap-3"
           >
             <div>
-              <span className="text-slate-400 text-[10px] block">Offset Distance:</span>
+              <span className="text-[#6B7280] text-[10px] uppercase tracking-wider block">Offset Distance:</span>
               <span className="text-white font-bold">
                 {hoveredPoint.distMeters >= 0 ? `+${hoveredPoint.distMeters} m` : `${hoveredPoint.distMeters} m`}
               </span>
             </div>
-            <div className="border-l border-slate-700/80 pl-2.5">
-              <span className="text-slate-400 text-[10px] block">Altitude:</span>
-              <span className="text-cyan-300 font-bold">{hoveredPoint.elevationMeters} m</span>
+            <div className="border-l border-white/[0.14] pl-2.5">
+              <span className="text-[#6B7280] text-[10px] uppercase tracking-wider block">Altitude:</span>
+              <span className="text-white font-bold">{hoveredPoint.elevationMeters} m</span>
             </div>
-            <div className="border-l border-slate-700/80 pl-2.5">
-              <span className="text-slate-400 text-[10px] block">Local Gradient:</span>
+            <div className="border-l border-white/[0.14] pl-2.5">
+              <span className="text-[#6B7280] text-[10px] uppercase tracking-wider block">Local Gradient:</span>
               <span className={`font-bold ${
-                hoveredPoint.status === 'SAFE' ? 'text-emerald-400' : hoveredPoint.status === 'CAUTION' ? 'text-amber-400' : 'text-rose-400'
+                hoveredPoint.status === 'SAFE' ? 'text-[#10B981]' : hoveredPoint.status === 'CAUTION' ? 'text-[#F59E0B]' : 'text-[#EF4444]'
               }`}>
                 {hoveredPoint.slopeDeg}° ({hoveredPoint.status})
               </span>
@@ -384,10 +383,10 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
       </div>
 
       {/* Scientific Context Footer Note */}
-      <div className="flex items-center gap-2 text-[11px] font-mono text-slate-400 bg-space-950/60 p-2.5 rounded-lg border border-slate-800/80">
-        <Info className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
+      <div className="flex items-center gap-2 text-[11px] font-mono text-[#9CA3AF] bg-black p-2.5 rounded-[2px] border border-white/[0.14]">
+        <Info className="w-3.5 h-3.5 text-white shrink-0" />
         <span>
-          Radial cross-section oriented along nominal descent azimuth. Touchdown corridor highlighted in green (±200 m).
+          Radial cross-section oriented along nominal descent azimuth. Touchdown corridor highlighted in emerald (±200 m).
         </span>
       </div>
     </div>

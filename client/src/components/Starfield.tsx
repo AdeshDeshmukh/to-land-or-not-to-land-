@@ -32,28 +32,14 @@ export const Starfield: React.FC = () => {
     }));
 
     const render = () => {
-      ctx.clearRect(0, 0, width, height);
-
-      // Deep space subtle gradient nebula
-      const nebula = ctx.createRadialGradient(
-        width * 0.3,
-        height * 0.2,
-        50,
-        width * 0.5,
-        height * 0.5,
-        Math.max(width, height) * 0.8
-      );
-      nebula.addColorStop(0, 'rgba(8, 47, 73, 0.15)'); // deep cyan
-      nebula.addColorStop(0.5, 'rgba(15, 23, 42, 0.4)');
-      nebula.addColorStop(1, 'rgba(3, 7, 18, 0.95)');
-      ctx.fillStyle = nebula;
+      ctx.fillStyle = '#000000';
       ctx.fillRect(0, 0, width, height);
 
-      // Render Stars
+      // Render monochrome stars
       stars.forEach((star) => {
         star.phase += star.twinkleSpeed;
         const currentAlpha = star.baseAlpha + Math.sin(star.phase) * 0.25;
-        ctx.fillStyle = `rgba(224, 242, 254, ${Math.max(0.1, Math.min(1, currentAlpha))})`;
+        ctx.fillStyle = `rgba(255, 255, 255, ${Math.max(0.1, Math.min(1, currentAlpha))})`;
         ctx.beginPath();
         ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
         ctx.fill();

@@ -126,3 +126,21 @@ export function estimateLunarTerrain(lat: number, lon: number, customName?: stri
   };
 }
 
+/**
+ * Compute time-shifted solar illumination percentage across the synodic cycle (-14d to +14d).
+ */
+export function computeSiteIllumination(site: CandidateSite, simulatedDateOffset: number): number {
+  if (Math.abs(simulatedDateOffset) < 0.05) return site.defaultIlluminationPct;
+  const delta = -Math.sin(simulatedDateOffset * 0.4) * 25;
+  return Math.max(5, Math.min(100, Math.round(site.defaultIlluminationPct + delta)));
+}
+
+/**
+ * Compute time-shifted Earth Direct-to-Earth (DTE) line-of-sight availability.
+ */
+export function computeSiteEarthLos(site: CandidateSite, simulatedDateOffset: number): boolean {
+  if (!site.defaultEarthLos) return false;
+  const earthAngle = 12.5 + Math.sin(simulatedDateOffset * 0.4) * 4.2;
+  return earthAngle > 0;
+}
+

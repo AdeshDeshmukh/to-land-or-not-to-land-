@@ -90,7 +90,7 @@ export const Term: React.FC<TermProps> = ({ k, children }) => {
     <>
       <span
         tabIndex={0}
-        className="border-b border-dotted border-cyan-300/80 cursor-help"
+        className="border-b border-dotted border-white/60 cursor-help"
         onMouseEnter={(e) => show(e.currentTarget)}
         onMouseLeave={() => setTip(null)}
         onFocus={(e) => show(e.currentTarget)}
@@ -109,10 +109,10 @@ export const Term: React.FC<TermProps> = ({ k, children }) => {
               width: TOOLTIP_WIDTH,
               transform: tip.above ? 'translateY(-100%)' : undefined,
             }}
-            className="z-[100] pointer-events-none rounded-lg border border-cyan-500/40 bg-space-950/95 backdrop-blur-md p-2.5 shadow-2xl text-left normal-case tracking-normal font-sans"
+            className="z-[100] pointer-events-none rounded-[2px] border border-white/25 bg-[#090A0D] p-2.5 shadow-2xl text-left normal-case tracking-normal font-sans"
           >
-            <div className="text-[11px] font-bold text-cyan-300 mb-1">{entry.label}</div>
-            <div className="text-[11px] leading-snug text-slate-200 font-normal">{entry.plain}</div>
+            <div className="text-[11px] font-mono uppercase tracking-wider font-bold text-white mb-1">{entry.label}</div>
+            <div className="text-[11px] leading-snug text-[#9CA3AF] font-normal">{entry.plain}</div>
           </div>,
           document.body
         )}

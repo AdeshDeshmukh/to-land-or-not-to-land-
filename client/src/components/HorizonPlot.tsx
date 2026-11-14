@@ -65,31 +65,31 @@ export const HorizonPlot: React.FC<HorizonPlotProps> = ({ site, simulatedDateOff
     .join(' ');
 
   return (
-    <div className="bg-space-900/90 border border-slate-800 rounded-xl p-5 shadow-xl backdrop-blur-md">
+    <div className="bg-[#090A0D] border border-white/[0.14] rounded-[2px] p-5">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-3">
         <div>
-          <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <Sun className="w-4 h-4 text-amber-400" /> 2D Local Horizon & Elevation Plot (Modeled)
+          <h3 className="text-xs font-mono uppercase tracking-wider font-semibold text-white flex items-center gap-2">
+            <Sun className="w-4 h-4 text-[#F59E0B]" /> 2D Local Horizon & Elevation Plot (Modeled)
           </h3>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-[#9CA3AF]">
             Local elevation angle above topographic horizon (0°) for Sun &amp; Earth across mission timeline. Earth drifts a few degrees because of <Term k="libration">lunar libration</Term>.
           </p>
         </div>
 
-        <div className="flex items-center gap-4 text-xs font-mono">
-          <div className="flex items-center gap-1.5 text-amber-300">
-            <span className="w-2.5 h-1 bg-amber-400 rounded-full"></span>
+        <div className="flex items-center gap-4 text-[11px] font-mono">
+          <div className="flex items-center gap-1.5 text-[#F59E0B]">
+            <span className="w-2.5 h-0.5 bg-[#F59E0B]"></span>
             <Term k="sunElevation">Sun Elevation</Term> (Power)
           </div>
-          <div className="flex items-center gap-1.5 text-cyan-300">
-            <span className="w-2.5 h-1 bg-cyan-400 rounded-full"></span>
+          <div className="flex items-center gap-1.5 text-white">
+            <span className="w-2.5 h-0.5 bg-white"></span>
             Earth <Term k="los">LOS</Term> (Comms)
           </div>
         </div>
       </div>
 
       {/* SVG Canvas Chart */}
-      <div className="relative w-full overflow-x-auto">
+      <div className="relative w-full overflow-x-auto bg-black rounded-[2px] border border-white/[0.14] p-2">
         <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto max-h-[190px]">
           {/* Below Horizon Hazard Zone (Shaded Area) */}
           <rect
@@ -127,15 +127,15 @@ export const HorizonPlot: React.FC<HorizonPlotProps> = ({ site, simulatedDateOff
             y1={padding}
             x2={width - padding}
             y2={padding}
-            stroke="rgba(148, 163, 184, 0.1)"
+            stroke="rgba(255, 255, 255, 0.1)"
             strokeWidth="1"
           />
 
           {/* Earth Path */}
-          <path d={earthPath} fill="none" stroke="#38BDF8" strokeWidth="2.5" />
+          <path d={earthPath} fill="none" stroke="#FFFFFF" strokeWidth="2" />
 
           {/* Sun Path */}
-          <path d={sunPath} fill="none" stroke="#F59E0B" strokeWidth="2.5" />
+          <path d={sunPath} fill="none" stroke="#F59E0B" strokeWidth="2" />
 
           {/* Current Day Indicator Marker */}
           {trajectory.map((point, idx) => {
@@ -147,17 +147,18 @@ export const HorizonPlot: React.FC<HorizonPlotProps> = ({ site, simulatedDateOff
                     y1={padding}
                     x2={getX(idx)}
                     y2={height - padding}
-                    stroke="#A855F7"
-                    strokeWidth="1.5"
+                    stroke="#FFFFFF"
+                    strokeWidth="1"
                     strokeDasharray="2 2"
+                    strokeOpacity="0.6"
                   />
                   <circle cx={getX(idx)} cy={getY(point.sunAngle)} r="4" fill="#F59E0B" />
-                  <circle cx={getX(idx)} cy={getY(point.earthAngle)} r="4" fill="#38BDF8" />
+                  <circle cx={getX(idx)} cy={getY(point.earthAngle)} r="4" fill="#FFFFFF" />
                   <text
                     x={getX(idx)}
                     y={padding - 6}
                     textAnchor="middle"
-                    fill="#A855F7"
+                    fill="#FFFFFF"
                     fontSize="9"
                     fontFamily="monospace"
                     fontWeight="bold"
@@ -179,7 +180,7 @@ export const HorizonPlot: React.FC<HorizonPlotProps> = ({ site, simulatedDateOff
                   x={getX(idx)}
                   y={height - padding + 15}
                   textAnchor="middle"
-                  fill="#94A3B8"
+                  fill="#9CA3AF"
                   fontSize="8"
                   fontFamily="monospace"
                 >
@@ -193,18 +194,18 @@ export const HorizonPlot: React.FC<HorizonPlotProps> = ({ site, simulatedDateOff
       </div>
 
       {/* Hazard Diagnostic Banner */}
-      <div className="mt-2 flex items-center justify-between text-xs font-mono border-t border-slate-800/80 pt-2 text-slate-300">
+      <div className="mt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-mono border-t border-white/[0.14] pt-2.5 text-[#9CA3AF]">
         <div className="flex items-center gap-1.5">
-          <AlertOctagon className="w-3.5 h-3.5 text-amber-400" />
+          <AlertOctagon className="w-3.5 h-3.5 text-[#F59E0B]" />
           <span>Operational Window Status:</span>
           {isSouthPole ? (
-            <span className="text-amber-400 font-bold">Low Grazing Angle (0°–4° Sun) • Severe Long Shadows</span>
+            <span className="text-[#F59E0B] font-bold">Low Grazing Angle (0°–4° Sun) • Severe Long Shadows</span>
           ) : (
-            <span className="text-emerald-400 font-bold">Nominal High Solar Arc (Up to 75°) • Safe Power</span>
+            <span className="text-[#10B981] font-bold">Nominal High Solar Arc (Up to 75°) • Safe Power</span>
           )}
         </div>
-        <div className="flex items-center gap-1 text-slate-400">
-          <Radio className="w-3.5 h-3.5 text-cyan-400" />
+        <div className="flex items-center gap-1 text-[#9CA3AF]">
+          <Radio className="w-3.5 h-3.5 text-white" />
           <span>Direct Comm Link: {site.defaultEarthLos ? 'LOCKED (Continuous)' : 'INTERRUPTED'}</span>
         </div>
       </div>
