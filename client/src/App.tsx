@@ -5,6 +5,7 @@ import { assessLandingSiteRisk } from './engine/riskEngine';
 import { CandidateSite, LanderProfile } from './types';
 import { LunarGlobe3D } from './components/LunarGlobe3D';
 import { LanderSelector } from './components/LanderSelector';
+import { CustomProbeModal } from './components/CustomProbeModal';
 import { Starfield } from './components/Starfield';
 import { HorizonPlot } from './components/HorizonPlot';
 import { ComparisonModal } from './components/ComparisonModal';
@@ -20,15 +21,29 @@ import {
   Layers, 
   Zap, 
   Flame, 
-  Clock 
+  Clock,
+  MapPin
 } from 'lucide-react';
 
 export default function App() {
+  const [allSites, setAllSites] = useState<CandidateSite[]>(CANDIDATE_SITES);
   const [selectedLander, setSelectedLander] = useState<LanderProfile>(DEFAULT_LANDER_PROFILES[0]);
   const [selectedSite, setSelectedSite] = useState<CandidateSite>(CANDIDATE_SITES[0]);
   const [simulatedDateOffset, setSimulatedDateOffset] = useState<number>(0); // Days offset
   const [isComparisonOpen, setIsComparisonOpen] = useState<boolean>(false);
+  const [isProbeModalOpen, setIsProbeModalOpen] = useState<boolean>(false);
+  const [probeCoords, setProbeCoords] = useState<{ lat: number; lon: number }>({ lat: -85, lon: 15 });
   const [currentTimeUTC, setCurrentTimeUTC] = useState<string>('');
+
+  const handleProbeCoordinate = (lat: number, lon: number) => {
+    setProbeCoords({ lat, lon });
+    setIsProbeModalOpen(true);
+  };
+
+  const handleAddCustomSite = (newSite: CandidateSite) => {
+    setAllSites(prev => [newSite, ...prev]);
+    setSelectedSite(newSite);
+  };
 
   useEffect(() => {
     const updateTime = () => {
@@ -103,8 +118,20 @@ export default function App() {
           </div>
 
           <button
-            onClick={() => setIsComparisonOpen(true)}
+            onClick={() => {
+              setProbeCoords({ lat: -85, lon: 15 });
+              setIsProbeModalOpen(true);
+            }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20 transition shadow-sm font-sans font-medium"
+            title="Probe custom coordinates anywhere on the Moon"
+          >
+            <MapPin className="w-4 h-4 text-cyan-400" />
+            <span className="hidden md:inline">Probe Coordinates</span>
+          </button>
+
+          <button
+            onClick={() => setIsComparisonOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800/80 border border-slate-700/60 text-slate-300 hover:bg-slate-700 hover:text-white transition shadow-sm font-sans font-medium"
           >
             <Layers className="w-4 h-4 text-cyan-400" />
             <span>Compare Sites</span>
@@ -130,11 +157,22 @@ export default function App() {
           />
 
           <div className="bg-space-900 border border-slate-800 rounded-xl p-5 shadow-lg">
-            <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider mb-3 flex items-center gap-2">
-              <Compass className="w-4 h-4 text-cyan-400" /> Candidate Landing Sites
-            </h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                <Compass className="w-4 h-4 text-cyan-400" /> Landing Sites ({allSites.length})
+              </h2>
+              <button
+                onClick={() => {
+                  setProbeCoords({ lat: -85, lon: 15 });
+                  setIsProbeModalOpen(true);
+                }}
+                className="text-xs font-mono text-cyan-400 hover:text-cyan-300 flex items-center gap-1 px-2.5 py-1 rounded bg-cyan-950/40 border border-cyan-500/30 hover:border-cyan-400 transition"
+              >
+                <MapPin className="w-3 h-3" /> + Custom Pin
+              </button>
+            </div>
             <div className="space-y-2">
-              {CANDIDATE_SITES.map((site) => {
+              {allSites.map((site) => {
                 const siteRisk = assessLandingSiteRisk(site, undefined, undefined, selectedLander);
                 const isSelected = site.id === selectedSite.id;
                 return (
@@ -225,11 +263,12 @@ export default function App() {
           
           {/* Interactive 3D Lunar Globe Viewport */}
           <LunarGlobe3D 
-            sites={CANDIDATE_SITES} 
+            sites={allSites} 
             selectedSite={selectedSite} 
             onSelectSite={setSelectedSite} 
             sunIlluminationOffset={simulatedDateOffset}
             lander={selectedLander}
+            onProbeCoordinate={handleProbeCoordinate}
           />
 
           {/* Top Banner: Site Status Summary */}
@@ -314,11 +353,21 @@ export default function App() {
 
       {/* Multi-Site Comparison Modal Drawer */}
       <ComparisonModal
-        sites={CANDIDATE_SITES}
+        sites={allSites}
         isOpen={isComparisonOpen}
         onClose={() => setIsComparisonOpen(false)}
         onSelectSite={setSelectedSite}
         lander={selectedLander}
+      />
+
+      {/* Custom Coordinate Probe Modal */}
+      <CustomProbeModal
+        isOpen={isProbeModalOpen}
+        onClose={() => setIsProbeModalOpen(false)}
+        onAddCustomSite={handleAddCustomSite}
+        selectedLander={selectedLander}
+        initialLat={probeCoords.lat}
+        initialLon={probeCoords.lon}
       />
 
       {/* Footer */}

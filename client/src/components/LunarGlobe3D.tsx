@@ -3,13 +3,15 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CandidateSite, LanderProfile } from '../types';
 import { assessLandingSiteRisk } from '../engine/riskEngine';
+import { vector3ToLatLon } from '../utils/lunarTelemetry';
 import { 
   Compass, 
   Layers, 
   RotateCw, 
   ZoomIn, 
   Maximize2, 
-  Info
+  Info,
+  MapPin
 } from 'lucide-react';
 
 interface LunarGlobe3DProps {
@@ -18,6 +20,7 @@ interface LunarGlobe3DProps {
   onSelectSite: (site: CandidateSite) => void;
   sunIlluminationOffset?: number; // Days offset
   lander?: LanderProfile;
+  onProbeCoordinate?: (lat: number, lon: number) => void;
 }
 
 const MOON_RADIUS = 3.5;
@@ -190,12 +193,20 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   onSelectSite,
   sunIlluminationOffset = 0,
   lander,
+  onProbeCoordinate,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [showSlopeHeatmap, setShowSlopeHeatmap] = useState<boolean>(true);
   const [autoRotate, setAutoRotate] = useState<boolean>(false);
   const [isZoomedIn, setIsZoomedIn] = useState<boolean>(false);
+  const [isProbeMode, setIsProbeMode] = useState<boolean>(false);
   const [hoveredSite, setHoveredSite] = useState<CandidateSite | null>(null);
+
+  const isProbeModeRef = useRef<boolean>(false);
+  isProbeModeRef.current = isProbeMode;
+
+  const onProbeCoordinateRef = useRef(onProbeCoordinate);
+  onProbeCoordinateRef.current = onProbeCoordinate;
 
   // References to keep Three.js scene instances across re-renders
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -355,6 +366,22 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(mouse, camera);
+
+      // 1. Probe Mode: Click anywhere on Moon surface to probe coordinates
+      if (isProbeModeRef.current && moonMeshRef.current) {
+        const moonIntersects = raycaster.intersectObject(moonMeshRef.current);
+        if (moonIntersects.length > 0) {
+          const hit = moonIntersects[0].point;
+          const { latitude, longitude } = vector3ToLatLon(hit.x, hit.y, hit.z, MOON_RADIUS);
+          if (onProbeCoordinateRef.current) {
+            onProbeCoordinateRef.current(latitude, longitude);
+          }
+          setIsProbeMode(false);
+          return;
+        }
+      }
+
+      // 2. Normal Mode: Click to select existing pins
       const intersects = raycaster.intersectObjects(pinsGroup.children, true);
 
       if (intersects.length > 0) {
@@ -372,6 +399,11 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+      if (isProbeModeRef.current) {
+        renderer.domElement.style.cursor = 'crosshair';
+        return;
+      }
 
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObjects(pinsGroup.children, true);
@@ -621,6 +653,20 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 
         {/* Right: Quick Action Buttons */}
         <div className="pointer-events-auto flex items-center gap-2">
+          {/* Drop-a-Pin Coordinate Probe Mode Button */}
+          <button
+            onClick={() => setIsProbeMode(prev => !prev)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono transition shadow-md border ${
+              isProbeMode 
+                ? 'bg-cyan-500 text-slate-950 font-bold border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.4)] animate-pulse' 
+                : 'bg-space-900/85 text-slate-300 border-slate-700/80 hover:bg-space-800'
+            }`}
+            title="Click anywhere on the 3D Moon to probe local landing parameters"
+          >
+            <MapPin className="w-3.5 h-3.5" />
+            <span>{isProbeMode ? 'CLICK ON MOON' : 'PROBE MODE'}</span>
+          </button>
+
           {/* Slope Map Toggle */}
           <button
             onClick={() => setShowSlopeHeatmap(prev => !prev)}
@@ -669,6 +715,14 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Active Probe Banner */}
+      {isProbeMode && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 bg-cyan-950/90 border border-cyan-400 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-mono text-cyan-200 shadow-2xl flex items-center gap-2 animate-bounce z-10 pointer-events-none">
+          <MapPin className="w-4 h-4 text-cyan-400 animate-pulse" />
+          <span>Click anywhere on lunar surface to probe coordinates</span>
+        </div>
+      )}
 
       {/* Hover Pin Tooltip HUD */}
       {hoveredSite && (
