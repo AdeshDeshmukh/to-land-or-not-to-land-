@@ -1,5 +1,6 @@
 import React from 'react';
 import { LanderProfile } from '../types';
+import { Term } from './Glossary';
 import { 
   Sliders, 
   RotateCcw, 
@@ -90,7 +91,7 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
         <div className="space-y-1 bg-space-950/60 p-2.5 rounded-lg border border-slate-800/70">
           <div className="flex items-center justify-between text-xs font-mono">
             <span className="text-slate-300 font-medium flex items-center gap-1.5">
-              <Shield className="w-3.5 h-3.5 text-cyan-400" /> Max Ground Slope:
+              <Shield className="w-3.5 h-3.5 text-cyan-400" /> Max Ground <Term k="slope">Slope</Term>:
             </span>
             <span className="px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-bold">
               {parameters.maxSlopeDeg.toFixed(1)}°
@@ -116,7 +117,7 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
         <div className="space-y-1 bg-space-950/60 p-2.5 rounded-lg border border-slate-800/70">
           <div className="flex items-center justify-between text-xs font-mono">
             <span className="text-slate-300 font-medium flex items-center gap-1.5">
-              <Sun className="w-3.5 h-3.5 text-amber-400" /> Min Solar Flux:
+              <Sun className="w-3.5 h-3.5 text-amber-400" /> Min <Term k="illumination">Solar Flux</Term>:
             </span>
             <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 font-bold">
               {parameters.minIlluminationPct}%
@@ -144,7 +145,7 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
             <Radio className="w-4 h-4 text-cyan-400" />
             <div>
               <span className="text-xs font-mono font-medium text-slate-200 block">
-                Direct Earth Link (DTE)
+                <Term k="dte">Direct Earth Link (DTE)</Term>
               </span>
               <span className="text-[10px] text-slate-400 block">
                 {parameters.requiresEarthLos ? 'Direct DSN required' : 'Relay supported'}
@@ -168,7 +169,7 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
         <div className="bg-space-950/60 p-2.5 rounded-lg border border-slate-800/70 space-y-1.5">
           <div className="flex items-center justify-between text-xs font-mono">
             <span className="text-slate-300 font-medium flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-slate-400" /> Roughness Limit:
+              <Layers className="w-3.5 h-3.5 text-slate-400" /> <Term k="roughness">Roughness</Term> Limit:
             </span>
             <span className="text-slate-200 font-bold">{parameters.maxRoughness}</span>
           </div>

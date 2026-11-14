@@ -8,6 +8,10 @@ import { HorizonPlot } from './components/HorizonPlot';
 import { ElevationProfile } from './components/ElevationProfile';
 import { CountdownTimers } from './components/CountdownTimers';
 import { Starfield } from './components/Starfield';
+import { MethodologyModal } from './components/MethodologyModal';
+import { DataAttribution } from './components/DataAttribution';
+import { PlainEnglishSummary } from './components/PlainEnglishSummary';
+import { ViewModeContext, ViewMode, Term, GlossaryKey } from './components/Glossary';
 import { 
   ShieldCheck, 
   AlertTriangle, 
@@ -22,8 +26,18 @@ import {
   RotateCcw,
   Zap,
   Flame,
-  Activity
+  Activity,
+  Scale,
+  GraduationCap
 } from 'lucide-react';
+
+// Maps engine factor names to glossary terms (used for Educator-mode tooltips)
+const FACTOR_TERM: Record<string, GlossaryKey> = {
+  'Terrain Slope': 'slope',
+  'Surface Roughness': 'roughness',
+  'Solar Illumination': 'illumination',
+  'Earth Line-of-Sight (LOS)': 'los',
+};
 
 export default function App() {
   const [allSites] = useState<CandidateSite[]>(CANDIDATE_SITES);
@@ -36,6 +50,10 @@ export default function App() {
   // Left & Right drawer toggles for clean, centered map experience
   const [isLeftDrawerOpen, setIsLeftDrawerOpen] = useState<boolean>(false);
   const [isRightDrawerOpen, setIsRightDrawerOpen] = useState<boolean>(false);
+
+  // Audience view (Mission Planner vs. Educator) and methodology modal
+  const [viewMode, setViewMode] = useState<ViewMode>('planner');
+  const [isMethodologyOpen, setIsMethodologyOpen] = useState<boolean>(false);
 
   // Synodic lunar day/night cycle animation loop (-14d to +14d)
   useEffect(() => {
@@ -89,6 +107,7 @@ export default function App() {
   };
 
   return (
+    <ViewModeContext.Provider value={viewMode}>
     <div className="h-screen w-screen bg-space-950 text-slate-100 flex flex-col font-sans relative overflow-hidden select-none">
       {/* Background Starfield */}
       <Starfield />
@@ -376,6 +395,16 @@ export default function App() {
             </div>
           </div>
 
+          {/* Educator view: same assessment, no jargon */}
+          {viewMode === 'educator' && (
+            <PlainEnglishSummary
+              site={selectedSite}
+              assessment={assessment}
+              parameters={landingParams}
+              illuminationPct={computedIllumination}
+            />
+          )}
+
           {/* 4-Factor Engineering Grid */}
           <div className="grid grid-cols-2 gap-2.5">
             {assessment.factors.map((factor, idx) => {
@@ -388,7 +417,9 @@ export default function App() {
                 >
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400">{factor.name}</span>
+                      <span className="text-[10px] uppercase font-mono tracking-wider text-slate-400">
+                        {FACTOR_TERM[factor.name] ? <Term k={FACTOR_TERM[factor.name]}>{factor.name}</Term> : factor.name}
+                      </span>
                       <span className={`text-[9px] font-mono px-1.5 py-0.2 rounded font-bold ${
                         isGreen ? 'bg-emerald-500/10 text-emerald-400' : isYellow ? 'bg-amber-500/10 text-amber-400' : 'bg-rose-500/10 text-rose-400'
                       }`}>
@@ -426,6 +457,56 @@ export default function App() {
         </aside>
 
       </div>
+
+      {/* Footer: data attribution, scoring methodology, and audience view toggle */}
+      <footer className="relative z-40 shrink-0 border-t border-slate-800/80 bg-space-950/90 backdrop-blur-md px-4 py-1.5 flex flex-wrap items-center justify-between gap-2">
+        <DataAttribution />
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setIsMethodologyOpen(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-slate-700 bg-space-900/80 text-[11px] font-mono font-semibold text-slate-200 hover:bg-space-800 hover:text-white transition"
+            title="See the exact thresholds behind every Green / Yellow / Red rating"
+          >
+            <Scale className="w-3.5 h-3.5 text-cyan-400" />
+            Scoring Methodology
+          </button>
+
+          <div
+            className="flex items-center rounded-md border border-slate-700 bg-space-900/80 p-0.5 text-[11px] font-mono font-semibold"
+            role="group"
+            aria-label="Audience view"
+          >
+            <button
+              onClick={() => setViewMode('planner')}
+              aria-pressed={viewMode === 'planner'}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded transition ${
+                viewMode === 'planner' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Technical view for mission planners and engineers"
+            >
+              <Sliders className="w-3 h-3" /> Planner
+            </button>
+            <button
+              onClick={() => setViewMode('educator')}
+              aria-pressed={viewMode === 'educator'}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded transition ${
+                viewMode === 'educator' ? 'bg-cyan-500/20 text-cyan-300' : 'text-slate-400 hover:text-slate-200'
+              }`}
+              title="Plain-English explanations for students and the public"
+            >
+              <GraduationCap className="w-3 h-3" /> Educator
+            </button>
+          </div>
+        </div>
+      </footer>
+
+      <MethodologyModal
+        isOpen={isMethodologyOpen}
+        onClose={() => setIsMethodologyOpen(false)}
+        parameters={landingParams}
+      />
     </div>
+    </ViewModeContext.Provider>
   );
 }

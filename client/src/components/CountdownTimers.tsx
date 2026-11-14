@@ -1,5 +1,6 @@
 import React from 'react';
 import { CandidateSite, LanderProfile } from '../types';
+import { Term } from './Glossary';
 import { 
   Sun, 
   Radio, 
@@ -242,7 +243,7 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
               ) : (
                 <Battery className="w-4 h-4 text-amber-400" />
               )}
-              Battery SoC Projection
+              <Term k="soc">Battery SoC Projection</Term>
             </span>
             <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
               isSunlit 
@@ -292,7 +293,7 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
         <div className="flex items-start gap-3 p-3.5 rounded-lg bg-rose-500/10 border border-rose-500/40 text-rose-300 text-xs font-mono animate-fadeIn">
           <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <strong className="text-rose-200 block text-xs">CRITICAL WARNING: SHADOW TRAP EXCEEDS 48 HOURS</strong>
+            <strong className="text-rose-200 block text-xs">CRITICAL WARNING: <Term k="shadowTrap">SHADOW TRAP</Term> EXCEEDS 48 HOURS</strong>
             <p className="text-rose-300/90">
               Site has been in continuous darkness for {shadowDurationHours} hours. Battery reserve will be exhausted in ~{Math.round((batterySoCPct / 100) * maxBatteryHours)} hours, risking irreversible cryogenic freeze of propellant tanks and avionics.
             </p>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { CandidateSite } from '../types';
 import { Sun, Radio, AlertOctagon } from 'lucide-react';
+import { Term } from './Glossary';
 
 interface HorizonPlotProps {
   site: CandidateSite;
@@ -68,21 +69,21 @@ export const HorizonPlot: React.FC<HorizonPlotProps> = ({ site, simulatedDateOff
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-2 mb-3">
         <div>
           <h3 className="text-sm font-bold text-white flex items-center gap-2">
-            <Sun className="w-4 h-4 text-amber-400" /> 2D Local Horizon & Elevation Plot (Ephemeris)
+            <Sun className="w-4 h-4 text-amber-400" /> 2D Local Horizon & Elevation Plot (Modeled)
           </h3>
           <p className="text-xs text-slate-400">
-            Local elevation angle above topographic horizon (0°) for Sun & Earth across mission timeline.
+            Local elevation angle above topographic horizon (0°) for Sun &amp; Earth across mission timeline. Earth drifts a few degrees because of <Term k="libration">lunar libration</Term>.
           </p>
         </div>
 
         <div className="flex items-center gap-4 text-xs font-mono">
           <div className="flex items-center gap-1.5 text-amber-300">
             <span className="w-2.5 h-1 bg-amber-400 rounded-full"></span>
-            Sun Elevation (Power)
+            <Term k="sunElevation">Sun Elevation</Term> (Power)
           </div>
           <div className="flex items-center gap-1.5 text-cyan-300">
             <span className="w-2.5 h-1 bg-cyan-400 rounded-full"></span>
-            Earth LOS (Comms)
+            Earth <Term k="los">LOS</Term> (Comms)
           </div>
         </div>
       </div>
