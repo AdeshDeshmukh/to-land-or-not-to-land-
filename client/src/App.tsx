@@ -1,13 +1,41 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { CANDIDATE_SITES } from './data/candidateSites';
 import { assessLandingSiteRisk } from './engine/riskEngine';
 import { CandidateSite } from './types';
 import { LunarGlobe } from './components/LunarGlobe';
-import { ShieldCheck, AlertTriangle, XCircle, Compass, Sun, Radio, Activity, Moon } from 'lucide-react';
+import { Starfield } from './components/Starfield';
+import { HorizonPlot } from './components/HorizonPlot';
+import { ComparisonModal } from './components/ComparisonModal';
+import { 
+  ShieldCheck, 
+  AlertTriangle, 
+  XCircle, 
+  Compass, 
+  Sun, 
+  Radio, 
+  Activity, 
+  Moon, 
+  Layers, 
+  Zap, 
+  Flame, 
+  Clock 
+} from 'lucide-react';
 
 export default function App() {
   const [selectedSite, setSelectedSite] = useState<CandidateSite>(CANDIDATE_SITES[0]);
   const [simulatedDateOffset, setSimulatedDateOffset] = useState<number>(0); // Days offset
+  const [isComparisonOpen, setIsComparisonOpen] = useState<boolean>(false);
+  const [currentTimeUTC, setCurrentTimeUTC] = useState<string>('');
+
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      setCurrentTimeUTC(now.toUTCString().slice(17, 25) + ' UTC');
+    };
+    updateTime();
+    const interval = setInterval(updateTime, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Simulate illumination shifts based on date offset
   const computedIllumination = Math.max(
@@ -41,7 +69,10 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-space-950 text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-space-950 text-slate-100 flex flex-col font-sans relative overflow-x-hidden">
+      {/* Background Deep Space Dynamic Starfield */}
+      <Starfield />
+
       {/* Header */}
       <header className="border-b border-slate-800 bg-space-900/60 backdrop-blur-md px-6 py-4 flex items-center justify-between sticky top-0 z-50">
         <div className="flex items-center gap-3">
@@ -58,9 +89,22 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-4 text-xs font-mono text-slate-400">
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800/80 border border-slate-700/60 text-slate-300">
+            <Clock className="w-3.5 h-3.5 text-cyan-400" />
+            <span>MISSION CLOCK: {currentTimeUTC}</span>
+          </div>
+
+          <button
+            onClick={() => setIsComparisonOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500/10 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/20 transition shadow-sm font-sans font-medium"
+          >
+            <Layers className="w-4 h-4 text-cyan-400" />
+            <span>Compare Sites</span>
+          </button>
+
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-            NASA LOLA & Moon Trek Grid: ACTIVE
+            NASA LOLA Grid: ACTIVE
           </div>
         </div>
       </header>
@@ -103,7 +147,7 @@ export default function App() {
             </div>
           </div>
 
-          {/* Launch Date Simulation Scrubber */}
+          {/* Launch Date Simulation Scrubber & Presets */}
           <div className="bg-space-900 border border-slate-800 rounded-xl p-5 shadow-lg">
             <div className="flex items-center justify-between mb-2">
               <h3 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
@@ -124,10 +168,39 @@ export default function App() {
               onChange={(e) => setSimulatedDateOffset(Number(e.target.value))}
               className="w-full accent-cyan-400 bg-slate-800 rounded-lg h-2 cursor-pointer"
             />
-            <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1">
+            <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1 mb-4">
               <span>-14 Days</span>
               <span>Nominal (T-0)</span>
               <span>+14 Days</span>
+            </div>
+
+            {/* Quick Presets for Demo */}
+            <div className="border-t border-slate-800/80 pt-3">
+              <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider block mb-2">
+                Quick Mission Presets (Demo)
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => {
+                    setSimulatedDateOffset(0);
+                    setSelectedSite(CANDIDATE_SITES[0]);
+                  }}
+                  className="px-2.5 py-1.5 rounded bg-slate-800/80 hover:bg-slate-800 text-[11px] text-slate-200 border border-slate-700/60 flex items-center gap-1.5 transition text-left"
+                >
+                  <Zap className="w-3.5 h-3.5 text-cyan-400" />
+                  <span>Nominal Arrival</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSimulatedDateOffset(6);
+                    setSelectedSite(CANDIDATE_SITES[2]);
+                  }}
+                  className="px-2.5 py-1.5 rounded bg-slate-800/80 hover:bg-slate-800 text-[11px] text-rose-300 border border-rose-500/30 flex items-center gap-1.5 transition text-left"
+                >
+                  <Flame className="w-3.5 h-3.5 text-rose-400" />
+                  <span>Shadow Trap (+6d)</span>
+                </button>
+              </div>
             </div>
           </div>
         </section>
@@ -192,6 +265,12 @@ export default function App() {
             })}
           </div>
 
+          {/* 2D Local Horizon & Elevation SkyPlot (Sun & Earth Angles) */}
+          <HorizonPlot 
+            site={selectedSite} 
+            simulatedDateOffset={simulatedDateOffset} 
+          />
+
           {/* Telemetry Bar */}
           <div className="bg-space-900/40 border border-slate-800/80 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 text-xs font-mono text-slate-400">
             <div className="flex items-center gap-2">
@@ -211,6 +290,14 @@ export default function App() {
         </section>
 
       </main>
+
+      {/* Multi-Site Comparison Modal Drawer */}
+      <ComparisonModal
+        sites={CANDIDATE_SITES}
+        isOpen={isComparisonOpen}
+        onClose={() => setIsComparisonOpen(false)}
+        onSelectSite={setSelectedSite}
+      />
 
       {/* Footer */}
       <footer className="border-t border-slate-800/80 bg-space-950 px-6 py-4 text-center text-xs text-slate-400">
