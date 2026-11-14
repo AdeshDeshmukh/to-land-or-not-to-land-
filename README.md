@@ -2,4 +2,4 @@
 Interactive Lunar Landing Site Risk Assessment & Visualization Platform — NASA Space Apps Challenge 2026
 
 ## Contributors / Team
-- **Lauri Salone** ([@salonelauri](https://github.com/salonelauri))
+- **Lauri Salonen** ([@salonelauri](https://github.com/salonelauri))
