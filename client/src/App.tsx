@@ -7,6 +7,7 @@ import { LandingParametersPanel, DEFAULT_MISSION_PARAMETERS } from './components
 import { CustomProbeModal } from './components/CustomProbeModal';
 import { Starfield } from './components/Starfield';
 import { HorizonPlot } from './components/HorizonPlot';
+import { ElevationProfile } from './components/ElevationProfile';
 import { CountdownTimers } from './components/CountdownTimers';
 import { ComparisonModal } from './components/ComparisonModal';
 import { 
@@ -403,6 +404,11 @@ export default function App() {
           <HorizonPlot 
             site={selectedSite} 
             simulatedDateOffset={simulatedDateOffset} 
+          />
+
+          {/* Topographic Elevation Cross-Section Profile (2 km Altimetry Slice) */}
+          <ElevationProfile 
+            site={selectedSite} 
           />
 
           {/* Telemetry Survival & Countdown Timers */}
