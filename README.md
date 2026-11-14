@@ -41,7 +41,7 @@ Because solar elevation hovers only **`+1°` to `+4°`** above the polar horizon
 **To Land or Not to Land** bridges high-level orbital reconnaissance and meter-scale touchdown verification in a SpaceX Dragon/Starship-inspired monochrome telemetry interface:
 
 - **Whole-Moon 3D WebGL Globe** built with `THREE.ObjectSpaceNormalMap`, isotropic polar LROC blending, and spherical LOLA elevation gradients so `-90°` renders seamlessly with zero polar distortion or starburst artifacts.
-- **2.4 km × 2.4 km Local 3D Surface DEM Inspector (`15 m/px`)** capable of zooming down to meter-scale boulders, crater bowls, regolith micro-relief, and interactive touchdown pad relocation.
+- **2.4 km × 2.4 km Local 3D Surface DEM Inspector (`10 m/px`)** capable of zooming down to meter-scale boulders, crater bowls, regolith micro-relief, and interactive touchdown pad relocation.
 - **Live 4-Factor Flight Risk Engine & Synodic Cycle Ephemeris Simulator** that dynamically recalculates `GO` / `CAUTION` / `NO-GO` verdicts, shadows, and Earth LOS across arbitrary Moon coordinates and UTC mission timestamps.
 
 ---
@@ -50,11 +50,11 @@ Because solar elevation hovers only **`+1°` to `+4°`** above the polar horizon
 
 | Capability | Module | Engineering Highlights |
 | :--- | :--- | :--- |
-| **Whole-Moon 3D Globe** | `LunarGlobe3D.tsx` | `192 × 192` tessellation, `THREE.ObjectSpaceNormalMap` surface relief (zero polar TBN seams), `absLat > 83°` isotropic 4-tap LROC cap smoothing, dual-octave 3D micro-regolith normal grain (`nFreqFine = 64.0`), and 27 IAU South Pole craters + 220 procedural micro-craters (`-68°` to `-78°` Hermite feathering). |
+| **Whole-Moon 3D Globe** | `LunarGlobe3D.tsx` | `256 × 256` tessellation, native **4K (`4096 × 2048`)** LROC monochrome albedo (`maxAniso`), **`2048 × 1024`** Gaussian-deblocked `THREE.ObjectSpaceNormalMap` (zero polar TBN seams), `absLat > 84°` isotropic 4-tap LROC cap smoothing, and 27 IAU South Pole craters + 45 procedural micro-craters (`-68°` to `-78°` Hermite feathering). |
 | **Quaternion Orbit Controls** | `LunarGlobe3D.tsx` | Gimbal-lock-free arcball/quaternion orbital rotation around `(0, 0, 0)` with inertial damping, fine low-orbit drag scaling (`MIN_CAM_DIST = 4.10`), and zero-React-rerender 60 FPS imperative DOM pin/leader-line projection. |
-| **Dynamic RYG Overlay HUD** | `LunarGlobe3D.tsx` | Independent translucent sphere layer driven by mission constraints and UTC ephemeris; toggleable **`Landing Assessment Overlay: ON / OFF`** and live **`Overlay Opacity (0–100%)`** slider over unobstructed monochrome terrain. |
+| **Dynamic RYG Overlay HUD** | `LunarGlobe3D.tsx` | Smooth `1024 × 512` translucent sphere layer driven by mission constraints and UTC ephemeris; toggleable **`Landing Assessment Overlay: ON / OFF`** and live **`Overlay Opacity (0–100%, default 42%)`** slider over unobstructed monochrome terrain. |
 | **Click-to-Inspect & Custom Coords** | `LunarGlobe3D.tsx`, `App.tsx` | Single-click any location on the Moon to sample the LOLA grid, deploy a target probe pin, and inspect live `GO`/`CAUTION`/`NO-GO` telemetry in `[data-testid="surface-risk-hud"]`; or deploy exact targets via the `COORDS` popover. |
-| **2.4 km 3D Local Surface DEM** | `LocalSurfaceDetailView.tsx` | Coordinate-seeded `160 × 160` (`15 m/px`) local lunar DEM patch with 3D `InstancedMesh` boulder clusters, ray-marched crater self-shadowing, **`Regolith` / `RYG Hazard` / `Topo Contours`** modes, **`Mesh`** wireframe, camera presets (`Oblique`, `Low Grazing`, `Overhead`), and clickable 3D / 2D Mini-Map touchdown pad relocation. |
+| **2.4 km 3D Local Surface DEM** | `LocalSurfaceDetailView.tsx` | Coordinate-seeded `240 × 240` (`10 m/px`) local lunar DEM patch with 3D `InstancedMesh` boulder clusters, ray-marched crater self-shadowing, **`Regolith` / `RYG Hazard` / `Topo Contours`** modes, **`Mesh`** wireframe, camera presets (`Oblique`, `Low Grazing`, `Overhead`), and clickable 3D / `220 × 220` 2D Mini-Map touchdown pad relocation. |
 | **4-Factor Risk Engine** | `riskEngine.ts` | Evaluates **Terrain Slope**, **Surface Roughness**, **Solar Illumination**, and **Earth LOS (DTE)** against customizable vehicle limits with deterministic worst-case dominance (`RED > YELLOW > GREEN`). |
 | **Synodic Cycle & UTC Simulator** | `lunarTelemetry.ts`, `App.tsx` | Scrub $\pm 14.77\text{ days}$ across the `29.530589`-day lunar synodic cycle or step UTC (`-1D`, `-6H`, `T0`, `+6H`, `+1D`, custom date/time) while synchronizing 3D directional lighting, horizon masks, DTE libration, and `CountdownTimers`. |
 | **Flight Telemetry & Dual Modes** | `HorizonPlot.tsx`, `MethodologyModal.tsx`, `Glossary.tsx` | Slide-out left (`Mission Inputs`) & right (`Telemetry`) drawers, 2D Sun/Earth azimuth-elevation `HorizonPlot`, topographic `ElevationProfile`, `PlainEnglishSummary`, **`Planner` vs `Educator`** inline glossary tooltips, and Scoring Methodology modal. |
@@ -75,17 +75,17 @@ flowchart TD
     end
 
     subgraph ENGINE["2. Telemetry & Engineering Risk Engine"]
-        GRID["512x256 Spherical Terrain Grid + 247 Polar Craters"]
-        TEX["2048x1024 Object-Space Normal + Monochrome Albedo"]
+        GRID["1024x512 Spherical Terrain Grid + 72 Polar Craters"]
+        TEX["4096x2048 4K Albedo + 2048x1024 Smoothed Object-Space Normal"]
         SOLAR["Subsolar & Earth Libration Ephemeris Solver"]
         RISK["4-Factor Risk Assessor (Slope / Roughness / Flux / DTE)"]
     end
 
     subgraph VIEWPORT["3. Interactive 3D & 2D Visualizers"]
-        GLOBE["3D Lunar Globe (Quaternion Orbit + Imperative Pins)"]
-        RYG["Dynamic RYG Feasibility Sphere Overlay (0-100% Opacity)"]
-        LOCAL["2.4 km x 2.4 km Local 3D Surface DEM + Boulder Instancing"]
-        MINIMAP["184x184 Interactive 2D Slope & Contour Mini-Map"]
+        GLOBE["3D Lunar Globe (256x256 Segments + Quaternion Orbit)"]
+        RYG["1024x512 Dynamic RYG Feasibility Overlay (0-100%, Default 42%)"]
+        LOCAL["2.4 km x 2.4 km Local 3D Surface DEM (240x240, 10 m/px)"]
+        MINIMAP["220x220 Interactive 2D Slope & Contour Mini-Map"]
     end
 
     subgraph HUD["4. SpaceX-Style Flight Telemetry HUD & Drawers"]
@@ -282,8 +282,8 @@ sequenceDiagram
 
     User->>Globe: Click "3D SURFACE PATCH" or "3D SURFACE DEM"
     Globe->>LocalDEM: Mount 2.4 km x 2.4 km DEM for active site and UTC sun offset
-    LocalDEM->>LocalDEM: Synthesize 160x160 DEM + boulders + shadow ray-march
-    User->>LocalDEM: Click 3D terrain or 2D Contour Mini-Map (xM, zM)
+    LocalDEM->>LocalDEM: Synthesize 240x240 DEM + boulders + shadow ray-march
+    User->>LocalDEM: Click 3D terrain or 220x220 Contour Mini-Map (xM, zM)
     LocalDEM->>LocalDEM: Relocate lander mesh and recompute 50m slope, boulders, shadow and status
     User->>LocalDEM: Click "Back to 3D Globe"
     LocalDEM-->>Globe: Dispose local WebGL resources and restore orbital state
@@ -298,7 +298,7 @@ sequenceDiagram
 | Site Name | Region | Lat / Lon | Elevation | Slope | Roughness | Baseline Sun Flux | Earth DTE | Mission Significance |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | **Shackleton Crater Rim** | South Pole | `-89.54°`, `0.00°` | `+4,200 m` | `4.2°` | `LOW` | `86%` | Direct LOS | Priority Artemis III ridge adjacent to PSR water-ice cold traps. |
-| **Connecting Ridge** | South Pole | `-89.45°`, `222.70°` | `+3,850 m` | `9.6°` | `MODERATE` | `64%` | Direct LOS | Elevated Artemis ridge corridor with narrow landing tolerances. |
+| **Connecting Ridge** | South Pole | `-89.45°`, `-137.30° (137.30°W)` | `+3,850 m` | `9.6°` | `MODERATE` | `64%` | Direct LOS | Elevated Artemis ridge corridor with narrow landing tolerances. |
 | **Malapert Mountain Peak** | South Pole | `-84.90°`, `12.90°` | `+5,000 m` | `7.8°` | `MODERATE` | `78%` | Direct LOS | Prominent southern massif providing strong Earth relay geometry. |
 | **Nobile Crater Region** | South Pole | `-85.20°`, `53.50°` | `-1,200 m` | `18.4°` | `HIGH` | `18%` | Occluded | Deep volatile-bearing depression with severe wall & shadow hazards. |
 | **Mare Tranquillitatis (Apollo 11)** | Equatorial | `0.67°`, `23.47°` | `-20 m` | `1.8°` | `LOW` | `92%` | Direct LOS | Historical baseline basaltic plain with minimal terrain hazard. |
@@ -362,7 +362,7 @@ to-land-or-not-to-land-/
 │   │   ├── types/
 │   │   │   └── index.ts                  # Strict TypeScript domain models & interfaces
 │   │   ├── utils/
-│   │   │   └── lunarTelemetry.ts         # Selenographic math, 247 polar craters, Sun/Earth ephem
+│   │   │   └── lunarTelemetry.ts         # Selenographic math, 72 polar craters, Sun/Earth ephem
 │   │   ├── App.tsx                       # Root telemetry state, drawers, time playback & modals
 │   │   ├── index.css                     # Obsidian monochrome HUD palette & range slider styling
 │   │   └── main.tsx                      # React 18 mount entry
@@ -389,7 +389,7 @@ Standard equirectangular normal maps using `THREE.TangentSpaceNormalMap` suffer 
 
 $$\vec{N}_{\text{obj}} = \text{normalize}\!\left(\vec{P} - \left(\frac{\partial H}{\partial E}\,\hat{E} + \frac{\partial H}{\partial N}\,\hat{N}\right)\right)$$
 
-Combined with constant arc-step spherical sampling of LOLA elevation ($\Delta\theta = 0.0035\text{ rad}$) and 4-tap isotropic polar smoothing for $|\text{lat}| > 83^\circ$, topography remains mathematically continuous across all `360°` at the poles.
+Combined with constant arc-step spherical sampling of LOLA elevation ($\Delta\theta = 0.0042\text{ rad}$) and 4-tap isotropic polar smoothing for $|\text{lat}| > 84^\circ$, topography remains mathematically continuous across all `360°` at the poles.
 
 ### 2. Synodic Solar Ephemeris & Earth Optical Libration
 Referenced to **`2026-09-01 00:00 UTC`** with lunar synodic period $T_{\text{syn}} = 29.530589\text{ days}$:
@@ -399,7 +399,7 @@ Referenced to **`2026-09-01 00:00 UTC`** with lunar synodic period $T_{\text{syn
 - **Earth Optical Libration (DTE)**: Models periodic latitudinal ($\sim 27.32\text{ d}$) and longitudinal ($\sim 27.55\text{ d}$) libration plus local horizon blocking in `computeEarthTelemetryAtTime`.
 
 ### 3. Meter-Scale Local Terrain & Shadow Ray-Marching
-Inside `LocalSurfaceDetailView.tsx`, clicking **`3D SURFACE PATCH`** samples a $2.4\text{ km} \times 2.4\text{ km}$ finite-difference grid ($\Delta s \approx 15.09\text{ m}$), computes vertex slopes $\arctan(\sqrt{(\partial_x H)^2 + (\partial_z H)^2})$, places ejecta boulders sized by roughness tier, and ray-marches $24$ horizon steps along local East-North-Up (ENU) solar vectors to flag self-shadowed touchdown pockets in real time.
+Inside `LocalSurfaceDetailView.tsx`, clicking **`3D SURFACE PATCH`** samples a $2.4\text{ km} \times 2.4\text{ km}$ finite-difference grid ($240 \times 240$ vertices, $\Delta s \approx 10.04\text{ m}$), computes vertex slopes $\arctan(\sqrt{(\partial_x H)^2 + (\partial_z H)^2})$, places ejecta boulders sized by roughness tier, and ray-marches $24$ horizon steps along local East-North-Up (ENU) solar vectors to flag self-shadowed touchdown pockets in real time.
 
 ---
 

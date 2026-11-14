@@ -598,7 +598,7 @@ export default function App() {
                 </span>
                 <h3 className="text-base font-bold text-white tracking-tight mt-0.5">{selectedSite.name}</h3>
                 <span className="text-[11px] text-[#9CA3AF] font-mono tabular-nums">
-                  {selectedSite.coordinates.latitude}° N, {selectedSite.coordinates.longitude}° E · ELEV {selectedSite.coordinates.elevation_m}M
+                  {Math.abs(selectedSite.coordinates.latitude).toFixed(2)}° {selectedSite.coordinates.latitude >= 0 ? 'N' : 'S'}, {Math.abs(selectedSite.coordinates.longitude).toFixed(2)}° {selectedSite.coordinates.longitude >= 0 ? 'E' : 'W'} · ELEV {selectedSite.coordinates.elevation_m >= 0 ? `+${selectedSite.coordinates.elevation_m}` : selectedSite.coordinates.elevation_m}M
                 </span>
               </div>
               <div className="shrink-0">{getStatusBadge(assessment.overall_status)}</div>
@@ -621,6 +621,7 @@ export default function App() {
               assessment={assessment}
               parameters={landingParams}
               illuminationPct={computedIllumination}
+              hasEarthLos={computedEarthLos}
             />
           )}
 

@@ -13,6 +13,7 @@ import {
   computeSiteIllumination,
   computeSiteEarthLos,
   getSouthPoleCraters,
+  getCanonicalSiteSunCutoffDeg,
   formatMissionUtc,
   parseMissionUtcInputs,
 } from '../utils/lunarTelemetry';
@@ -652,7 +653,11 @@ function buildTerrainGrid(presetSites: CandidateSite[], bumpImg?: HTMLImageEleme
 
     let siteSunCutoff = 0;
     let siteEarthCutoff = 0;
-    if (site.coordinates.elevation_m >= 2500) {
+    const canonicalSunCutoff = getCanonicalSiteSunCutoffDeg(site.id);
+    if (canonicalSunCutoff !== null) {
+      siteSunCutoff = canonicalSunCutoff;
+      siteEarthCutoff = site.coordinates.elevation_m >= 2500 ? -1.7 : 0;
+    } else if (site.coordinates.elevation_m >= 2500) {
       siteSunCutoff = -1.65 - Math.min(0.6, (site.coordinates.elevation_m - 2500) / 4500);
       siteEarthCutoff = -1.7;
     } else if (site.coordinates.elevation_m <= -800 && sLat <= -75) {
@@ -734,7 +739,7 @@ function paintDynamicOverlayTexture(
   const data = imgData.data;
 
   const maxSlope = lander ? lander.maxSlopeDeg : 15.0;
-  const cautionSlope = lander ? lander.maxSlopeDeg * 0.72 : 5.0;
+  const cautionSlope = lander ? lander.maxSlopeDeg * 0.75 : 5.0;
   const minIllum = lander ? lander.minIlluminationPct : 70;
   const criticalIllum = lander ? lander.minIlluminationPct * 0.5 : 30;
   const requiresLos = lander ? lander.requiresEarthLos : true;
@@ -2401,9 +2406,18 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 
         <div className="pointer-events-auto ml-auto bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF] flex items-center gap-2.5 tabular-nums">
           <span className="text-white font-semibold">{selectedSite.name}</span>
-          <span>LAT {selectedSite.coordinates.latitude}°</span>
-          <span>LON {selectedSite.coordinates.longitude}°</span>
-          <span>ELEV {selectedSite.coordinates.elevation_m}M</span>
+          <span>
+            LAT {selectedSite.coordinates.latitude >= 0 ? '+' : ''}
+            {selectedSite.coordinates.latitude.toFixed(2)}°
+          </span>
+          <span>
+            LON {selectedSite.coordinates.longitude >= 0 ? '+' : ''}
+            {selectedSite.coordinates.longitude.toFixed(2)}°
+          </span>
+          <span>
+            ELEV {selectedSite.coordinates.elevation_m >= 0 ? '+' : ''}
+            {selectedSite.coordinates.elevation_m}M
+          </span>
         </div>
       </div>
 

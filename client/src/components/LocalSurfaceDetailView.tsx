@@ -579,6 +579,12 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
       if (s > footprintMaxSlope) footprintMaxSlope = s;
     }
 
+    const centerDistM = Math.hypot(xM, zM);
+    const centerWeight = Math.max(0, 1 - centerDistM / 60);
+    const effectivePadSlope = Number(
+      (footprintMaxSlope * (1 - centerWeight) + site.terrain.slope_deg * centerWeight).toFixed(1)
+    );
+
     let nearestBoulderM = 9999;
     let nearestRadiusM = 0;
     for (const b of dem.boulders) {
@@ -590,37 +596,55 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
     }
 
     const shadowed = isPointLocallyShadowed(dem, xM, zM, enu);
-    const solarIllumPct = shadowed
-      ? Math.max(0, Math.min(18, enu.baseIllumPct))
-      : Math.max(enu.baseIllumPct, enu.effectiveSunElevDeg > 0 ? 78 : 8);
+    const solarIllumPct =
+      enu.effectiveSunElevDeg <= 0
+        ? enu.baseIllumPct
+        : shadowed
+          ? Math.max(4, Math.min(18, Math.round(enu.baseIllumPct * 0.25)))
+          : enu.baseIllumPct;
+
+    const maxRoughness = lander?.maxRoughness ?? 'MODERATE';
+    const isRoughRed = site.terrain.roughness === 'HIGH' && maxRoughness !== 'HIGH';
+    const isRoughYellow =
+      (site.terrain.roughness === 'HIGH' && maxRoughness === 'HIGH') ||
+      (site.terrain.roughness === 'MODERATE' && maxRoughness === 'LOW');
 
     let status: RiskLevel = 'GREEN';
     let reason = 'CLEAR 50M FOOTPRINT & SUNLIT';
 
-    if (footprintMaxSlope > maxSlopeLimit * 1.15) {
+    if (effectivePadSlope > maxSlopeLimit) {
       status = 'RED';
-      reason = `EXCESSIVE LOCAL SLOPE (${footprintMaxSlope.toFixed(1)}°)`;
+      reason = `EXCESSIVE LOCAL SLOPE (${effectivePadSlope.toFixed(1)}°)`;
     } else if (nearestBoulderM < 16) {
       status = 'RED';
       reason = `BOULDER OBSTACLE (${Math.max(0, nearestBoulderM).toFixed(0)}M AWAY)`;
-    } else if (shadowed && solarIllumPct < minIllumLimit * 0.5) {
+    } else if (centerDistM < 60 && isRoughRed) {
       status = 'RED';
-      reason = 'CRATER SELF-SHADOW / LOW POWER';
+      reason = 'HIGH SURFACE ROUGHNESS EXCEEDS LIMIT';
+    } else if (solarIllumPct < minIllumLimit * 0.5) {
+      status = 'RED';
+      reason = `CRITICAL SHADOW / LOW SOLAR FLUX (${solarIllumPct}%)`;
     } else if (requiresEarthLos && !enu.hasEarthDte) {
       status = 'RED';
       reason = 'EARTH DTE OCCLUDED BY HORIZON';
     } else if (
-      footprintMaxSlope > maxSlopeLimit * 0.72 ||
+      effectivePadSlope >= maxSlopeLimit * 0.75 ||
       nearestBoulderM < 34 ||
-      solarIllumPct < minIllumLimit
+      (centerDistM < 60 && isRoughYellow) ||
+      solarIllumPct < minIllumLimit ||
+      (!requiresEarthLos && !enu.hasEarthDte)
     ) {
       status = 'YELLOW';
       reason =
         nearestBoulderM < 34
           ? `BOULDER PROXIMITY (${nearestBoulderM.toFixed(0)}M)`
-          : footprintMaxSlope > maxSlopeLimit * 0.72
-            ? `MARGINAL SLOPE (${footprintMaxSlope.toFixed(1)}°)`
-            : `MARGINAL SOLAR FLUX (${solarIllumPct}%)`;
+          : effectivePadSlope >= maxSlopeLimit * 0.75
+            ? `MARGINAL SLOPE (${effectivePadSlope.toFixed(1)}°)`
+            : centerDistM < 60 && isRoughYellow
+              ? 'MODERATE/HIGH ROUGHNESS CAUTION'
+              : solarIllumPct < minIllumLimit
+                ? `MARGINAL SOLAR FLUX (${solarIllumPct}%)`
+                : 'DTE OCCLUDED — RELAY REQUIRED';
     }
 
     const { latDeg, lonDeg } = offsetMetersToLatLon(
@@ -636,7 +660,7 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
       latDeg,
       lonDeg,
       elevM: pointElevM,
-      slopeDeg: Number(footprintMaxSlope.toFixed(1)),
+      slopeDeg: effectivePadSlope,
       nearestBoulderM: Math.max(0, Math.round(nearestBoulderM)),
       boulderRadiusM: Number(nearestRadiusM.toFixed(1)),
       solarIllumPct,
@@ -645,7 +669,7 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
       status,
       reason,
     };
-  }, [dem, padPosM, site, enu, maxSlopeLimit, minIllumLimit, requiresEarthLos]);
+  }, [dem, padPosM, site, enu, maxSlopeLimit, minIllumLimit, requiresEarthLos, lander?.maxRoughness]);
 
   // Refs shared with WebGL loop
   const demRef = useRef(dem);
@@ -735,11 +759,11 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
           let hr = 0.06;
           let hg = 0.72;
           let hb = 0.50;
-          if (slp > slopeLimit * 1.05 || shadowed || rough > 2.4) {
+          if (slp > slopeLimit || shadowed || rough > 2.4) {
             hr = 0.94;
             hg = 0.27;
             hb = 0.27;
-          } else if (slp > slopeLimit * 0.65 || rough > 1.3) {
+          } else if (slp >= slopeLimit * 0.75 || rough > 1.3) {
             hr = 0.96;
             hg = 0.62;
             hb = 0.04;
@@ -863,11 +887,11 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
         let g = base;
         let b = base;
 
-        if (slp > maxSlopeLimit * 1.05) {
+        if (slp > maxSlopeLimit) {
           r = Math.round(r * 0.5 + 239 * 0.5);
           g = Math.round(g * 0.5 + 68 * 0.5);
           b = Math.round(b * 0.5 + 68 * 0.5);
-        } else if (slp > maxSlopeLimit * 0.65) {
+        } else if (slp >= maxSlopeLimit * 0.75) {
           r = Math.round(r * 0.55 + 245 * 0.45);
           g = Math.round(g * 0.55 + 158 * 0.45);
           b = Math.round(b * 0.55 + 11 * 0.45);
