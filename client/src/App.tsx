@@ -62,20 +62,38 @@ export default function App() {
 
   const missionUtc = formatMissionUtc(simulatedDateOffset);
 
-  const handleDeployCustomCoordinates = (lat: number, lon: number, customName?: string) => {
-    const newSite = estimateLunarTerrain(Number(lat.toFixed(2)), Number(lon.toFixed(2)), customName);
+  const handleDeployCustomCoordinates = (
+    lat: number,
+    lon: number,
+    customName?: string,
+    sampledSlopeDeg?: number,
+    sampledElevM?: number,
+    options?: { openDrawer?: boolean }
+  ) => {
+    const newSite = estimateLunarTerrain(
+      Number(lat.toFixed(2)),
+      Number(lon.toFixed(2)),
+      customName,
+      sampledSlopeDeg,
+      sampledElevM
+    );
     setAllSites((prev) => {
-      // Keep the 5 canonical sites + up to 6 most recent custom targets
       const presets = prev.slice(0, CANDIDATE_SITES.length);
-      const custom = prev.slice(CANDIDATE_SITES.length).slice(-5);
-      return [...presets, ...custom, newSite];
+      const custom = prev.slice(CANDIDATE_SITES.length);
+      if (newSite.id === 'custom_surface_target') {
+        const namedOnly = custom.filter((s) => s.id !== 'custom_surface_target').slice(-4);
+        return [...presets, ...namedOnly, newSite];
+      }
+      return [...presets, ...custom.slice(-5), newSite];
     });
     setSelectedSite(newSite);
     setCustomLatInput(newSite.coordinates.latitude.toFixed(2));
     setCustomLonInput(newSite.coordinates.longitude.toFixed(2));
     setCustomNameInput('');
     setCustomCoordError('');
-    setIsRightDrawerOpen(true);
+    if (options?.openDrawer) {
+      setIsRightDrawerOpen(true);
+    }
   };
 
   const handleSubmitDrawerCoordinates = (e: React.FormEvent) => {
@@ -90,7 +108,14 @@ export default function App() {
       setCustomCoordError('Longitude must be between -180° and +180°.');
       return;
     }
-    handleDeployCustomCoordinates(lat, lon, customNameInput.trim() || undefined);
+    handleDeployCustomCoordinates(
+      lat,
+      lon,
+      customNameInput.trim() || undefined,
+      undefined,
+      undefined,
+      { openDrawer: true }
+    );
   };
 
   // Left & Right drawer toggles for clean, centered map experience
@@ -223,6 +248,7 @@ export default function App() {
               setIsPlaying(false);
               setSimulatedDateOffset(offset);
             }}
+            onOpenTelemetryDrawer={() => setIsRightDrawerOpen(true)}
             leftDrawerOpen={isLeftDrawerOpen}
             rightDrawerOpen={isRightDrawerOpen}
           />

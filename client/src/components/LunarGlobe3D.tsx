@@ -1,6 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { CandidateSite, LanderProfile, RiskLevel } from '../types';
 import { assessLandingSiteRisk } from '../engine/riskEngine';
 import {
@@ -25,6 +24,8 @@ import {
   MapPin,
   Crosshair,
   Clock,
+  Focus,
+  BarChart3,
 } from 'lucide-react';
 
 interface LunarGlobe3DProps {
@@ -33,8 +34,15 @@ interface LunarGlobe3DProps {
   onSelectSite: (site: CandidateSite) => void;
   sunIlluminationOffset?: number; // Days offset
   lander?: LanderProfile;
-  onProbeCoordinate?: (lat: number, lon: number, customName?: string) => void;
+  onProbeCoordinate?: (
+    lat: number,
+    lon: number,
+    customName?: string,
+    sampledSlopeDeg?: number,
+    sampledElevM?: number
+  ) => void;
   onChangeDateOffset?: (offsetDays: number) => void;
+  onOpenTelemetryDrawer?: () => void;
   leftDrawerOpen?: boolean;
   rightDrawerOpen?: boolean;
 }
@@ -43,6 +51,7 @@ interface TerrainGrid {
   width: number;
   height: number;
   slopeDeg: Float32Array;
+  elevM: Float32Array;
   roughnessCode: Uint8Array; // 0 = LOW, 1 = MODERATE, 2 = HIGH
   horizonCutoffDeg: Float32Array;
   earthCutoffDeg: Float32Array;
@@ -51,24 +60,21 @@ interface TerrainGrid {
   nz: Float32Array;
 }
 
-interface ProjectedPin {
-  site: CandidateSite;
-  status: RiskLevel;
-  illumPct: number;
-  sx: number;
-  sy: number;
-  labelX: number;
-  labelY: number;
-  align: 'left' | 'right';
-}
-
 const MOON_RADIUS = 3.5;
 const GRID_W = 512;
 const GRID_H = 256;
 const SURF_TEX_W = 2048;
 const SURF_TEX_H = 1024;
+const MIN_CAM_DIST = 4.35;
+const MAX_CAM_DIST = 15.0;
 
 const INITIAL_CAM_POS = new THREE.Vector3(5.6, -5.8, -2.2);
+
+function computeUpForNormal(normal: THREE.Vector3): THREE.Vector3 {
+  const n = normal.clone().normalize();
+  const refUp = Math.abs(n.y) > 0.92 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
+  return refUp.addScaledVector(n, -refUp.dot(n)).normalize();
+}
 
 const SHORT_NAMES: Record<string, string> = {
   shackleton_rim: 'SHACKLETON',
@@ -116,7 +122,7 @@ function getCraterDescriptors(): CraterDescriptor[] {
     const center = latLonToCartesian(c.lat, c.lon, 1);
     const rRad = (c.radiusDeg * Math.PI) / 180;
     const rOuterRad = rRad * 1.48;
-    const steepScale = 0.56 * Math.min(1.35, 0.72 + 0.32 / Math.sqrt(Math.max(0.22, c.radiusDeg)));
+    const steepScale = 0.072 * Math.min(1.20, 0.78 + 0.22 / Math.sqrt(Math.max(0.22, c.radiusDeg)));
     return {
       cx: center.x,
       cy: center.y,
@@ -179,8 +185,116 @@ function fbm3D(x: number, y: number, z: number): number {
   );
 }
 
-// 1. Synthesize Monochrome Lunar Albedo & Spherical Tangent-Space Normal Map
-// Preserves full LROC/LOLA mid-latitude fidelity while sculpting crisp circular 3D-lit South Pole craters down to -90°.
+// Bilinearly sample an equirectangular RGBA buffer (channel 0) along an arbitrary 3D unit vector
+function sampleEquirectBilinear(
+  data: Uint8ClampedArray,
+  w: number,
+  h: number,
+  vx: number,
+  vy: number,
+  vz: number
+): number {
+  const invLen = 1.0 / Math.sqrt(vx * vx + vy * vy + vz * vz);
+  const ny = Math.max(-1, Math.min(1, vy * invLen));
+  const lat = Math.asin(ny);
+  const lon = Math.atan2(-vz * invLen, vx * invLen);
+
+  let fx = (lon / (2 * Math.PI) + 0.5) * w - 0.5;
+  fx = ((fx % w) + w) % w;
+  let fy = (0.5 - lat / Math.PI) * h - 0.5;
+  if (fy < 0) fy = 0;
+  else if (fy > h - 1) fy = h - 1;
+
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const x1 = (x0 + 1) % w;
+  const y1 = y0 < h - 1 ? y0 + 1 : y0;
+  const tx = fx - x0;
+  const ty = fy - y0;
+
+  const r0 = y0 * w;
+  const r1 = y1 * w;
+  const v00 = data[(r0 + x0) * 4];
+  const v10 = data[(r0 + x1) * 4];
+  const v01 = data[(r1 + x0) * 4];
+  const v11 = data[(r1 + x1) * 4];
+
+  const a = v00 + (v10 - v00) * tx;
+  const b = v01 + (v11 - v01) * tx;
+  return a + (b - a) * ty;
+}
+
+// Bilinearly sample a Float32Array equirectangular grid along a 3D unit vector
+function sampleFloatEquirectBilinear(
+  arr: Float32Array,
+  w: number,
+  h: number,
+  vx: number,
+  vy: number,
+  vz: number
+): number {
+  const invLen = 1.0 / Math.sqrt(vx * vx + vy * vy + vz * vz);
+  const ny = Math.max(-1, Math.min(1, vy * invLen));
+  const lat = Math.asin(ny);
+  const lon = Math.atan2(-vz * invLen, vx * invLen);
+
+  let fx = (lon / (2 * Math.PI) + 0.5) * w - 0.5;
+  fx = ((fx % w) + w) % w;
+  let fy = (0.5 - lat / Math.PI) * h - 0.5;
+  if (fy < 0) fy = 0;
+  else if (fy > h - 1) fy = h - 1;
+
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const x1 = (x0 + 1) % w;
+  const y1 = y0 < h - 1 ? y0 + 1 : y0;
+  const tx = fx - x0;
+  const ty = fy - y0;
+
+  const r0 = y0 * w;
+  const r1 = y1 * w;
+  const v00 = arr[r0 + x0];
+  const v10 = arr[r0 + x1];
+  const v01 = arr[r1 + x0];
+  const v11 = arr[r1 + x1];
+
+  const a = v00 + (v10 - v00) * tx;
+  const b = v01 + (v11 - v01) * tx;
+  return a + (b - a) * ty;
+}
+
+// Lookup local slope & elevation directly from TerrainGrid at arbitrary (lat, lon)
+function sampleTerrainGrid(
+  grid: TerrainGrid | null,
+  latDeg: number,
+  lonDeg: number
+): { slopeDeg?: number; elevM?: number } {
+  if (!grid) return {};
+  const { width: w, height: h, slopeDeg, elevM } = grid;
+  const fx = ((((lonDeg + 180) / 360) * w - 0.5) % w + w) % w;
+  const fy = Math.max(0, Math.min(h - 1, ((90 - latDeg) / 180) * h - 0.5));
+
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const x1 = (x0 + 1) % w;
+  const y1 = Math.min(h - 1, y0 + 1);
+  const tx = fx - x0;
+  const ty = fy - y0;
+
+  const bilerp = (arr: Float32Array) => {
+    const a = arr[y0 * w + x0] + (arr[y0 * w + x1] - arr[y0 * w + x0]) * tx;
+    const b = arr[y1 * w + x0] + (arr[y1 * w + x1] - arr[y1 * w + x0]) * tx;
+    return a + (b - a) * ty;
+  };
+
+  return {
+    slopeDeg: Number(bilerp(slopeDeg).toFixed(1)),
+    elevM: Math.round(bilerp(elevM)),
+  };
+}
+
+// 1. Synthesize Unified Whole-Moon Monochrome Albedo & Spherical Tangent-Space Normal Map
+// Uses physical constant-arc spherical LOLA gradients all the way to the poles + subtly feathered polar craters.
 function paintLunarSurfaceTextures(
   monoCanvas: HTMLCanvasElement,
   monoTexture: THREE.CanvasTexture,
@@ -197,7 +311,6 @@ function paintLunarSurfaceTextures(
   const nctx = normalCanvas.getContext('2d', { willReadFrequently: true })!;
   const bctx = bumpCanvas.getContext('2d', { willReadFrequently: true })!;
 
-  // Base albedo from LROC polar texture (or neutral regolith seed before image load)
   if (lrocImg) {
     mctx.drawImage(lrocImg, 0, 0, w, h);
   } else {
@@ -206,8 +319,8 @@ function paintLunarSurfaceTextures(
   }
   const monoImgData = mctx.getImageData(0, 0, w, h);
   const mData = monoImgData.data;
+  const lrocSrc = lrocImg ? new Uint8ClampedArray(mData) : null;
 
-  // Extract LOLA bump pixels if decoded
   let lolaData: Uint8ClampedArray | null = null;
   if (bumpImg) {
     bctx.drawImage(bumpImg, 0, 0, w, h);
@@ -222,28 +335,31 @@ function paintLunarSurfaceTextures(
   const craters = getCraterDescriptors();
   const numCraters = craters.length;
   const deg2Rad = Math.PI / 180;
+  const stepRad = 0.0035;
+  const nFreq = 22.0;
   const noiseEps = 0.008;
 
   for (let py = 0; py < h; py++) {
     const latDeg = 90 - ((py + 0.5) / h) * 180;
+    const absLat = Math.abs(latDeg);
     const latRad = latDeg * deg2Rad;
     const sinLat = Math.sin(latRad);
     const cosLat = Math.cos(latRad);
-    const cosLatClamped = Math.max(0.32, cosLat);
-    const isPolarCraterZone = latDeg <= -57.5;
 
-    // Taper LOLA finite-difference gradient smoothly to 0 by -64° so polar equirectangular JPEG stripes never appear
-    let lolaPoleFade = 1.0;
-    if (latDeg < -52) {
-      const t = Math.max(0, Math.min(1, (-52 - latDeg) / 12));
-      lolaPoleFade = 1 - t * t * (3 - 2 * t);
-    } else if (latDeg > 60) {
-      const t = Math.max(0, Math.min(1, (latDeg - 60) / 15));
-      lolaPoleFade = 1 - t * t * (3 - 2 * t);
+    // Taper LOLA only inside the extreme |lat| > 80° pole tip (down to 0.25 at |lat| = 90°)
+    let lolaWeight = 1.0;
+    if (absLat > 80) {
+      const t = Math.min(1, (absLat - 80) / 10);
+      lolaWeight = 1.0 - 0.75 * (t * t * (3 - 2 * t));
     }
 
-    const pyUp = Math.max(0, py - 1);
-    const pyDn = Math.min(h - 1, py + 1);
+    // Smooth cubic fade for polar crater detail (-70° = 0.0 -> -82° = 1.0)
+    let polarBlend = 0.0;
+    if (latDeg < -70) {
+      const pt = Math.min(1, (-70 - latDeg) / 12);
+      polarBlend = pt * pt * (3 - 2 * pt);
+    }
+
     const rowOffset = py * w;
 
     for (let px = 0; px < w; px++) {
@@ -265,37 +381,76 @@ function paintLunarSurfaceTextures(
       const nyAxis = cosLat;
       const nzAxis = sinLat * sinLon;
 
-      // 1) Base LROC monochrome albedo
+      // 1) Base LROC monochrome albedo (with isotropic spherical polar smoothing above |lat| > 83° to prevent UV spoke stretching)
       let albedoLum: number;
-      if (lrocImg) {
-        const lum = 0.299 * mData[p4] + 0.587 * mData[p4 + 1] + 0.114 * mData[p4 + 2];
-        albedoLum = Math.min(255, Math.max(0, Math.pow(lum / 255, 1.06) * 235 + 10));
+      if (lrocSrc) {
+        const lum = 0.299 * lrocSrc[p4] + 0.587 * lrocSrc[p4 + 1] + 0.114 * lrocSrc[p4 + 2];
+        let baseLum = Math.min(255, Math.max(0, Math.pow(lum / 255, 1.06) * 235 + 10));
+        if (absLat > 83) {
+          const capT = Math.min(1, (absLat - 83) / 6.5);
+          const capBlend = capT * capT * (3 - 2 * capT);
+          const sr = 0.016;
+          const isoRaw =
+            (sampleEquirectBilinear(lrocSrc, w, h, vx + sr * ex, vy, vz + sr * ez) +
+              sampleEquirectBilinear(lrocSrc, w, h, vx - sr * ex, vy, vz - sr * ez) +
+              sampleEquirectBilinear(lrocSrc, w, h, vx + sr * nxAxis, vy + sr * nyAxis, vz + sr * nzAxis) +
+              sampleEquirectBilinear(lrocSrc, w, h, vx - sr * nxAxis, vy - sr * nyAxis, vz - sr * nzAxis)) *
+            0.25;
+          const isoLum = Math.min(255, Math.max(0, Math.pow(isoRaw / 255, 1.06) * 235 + 10));
+          baseLum = baseLum * (1 - capBlend) + isoLum * capBlend;
+        }
+        albedoLum = baseLum;
       } else {
         albedoLum = 138 + fbm3D(vx * 5, vy * 5, vz * 5) * 16;
       }
 
-      // 2) LOLA terrain slope + height (mid-latitudes smoothed cleanly, tapered near poles)
+      // 2) Spherical tangent-step LOLA elevation & normal derivatives (zero mid-latitude/polar discontinuity)
       let heightNorm = 0;
       let dH_dEast = 0;
       let dH_dNorth = 0;
 
-      if (lolaData && lolaPoleFade > 0.005) {
-        const pxL = (px - 1 + w) % w;
-        const pxR = (px + 1) % w;
+      if (lolaData) {
         const eC = lolaData[p4];
-        const eL = lolaData[(rowOffset + pxL) * 4];
-        const eR = lolaData[(rowOffset + pxR) * 4];
-        const eU = lolaData[(pyUp * w + px) * 4];
-        const eD = lolaData[(pyDn * w + px) * 4];
+        const eE_plus = sampleEquirectBilinear(lolaData, w, h, vx + stepRad * ex, vy, vz + stepRad * ez);
+        const eE_minus = sampleEquirectBilinear(lolaData, w, h, vx - stepRad * ex, vy, vz - stepRad * ez);
+        const eN_plus = sampleEquirectBilinear(
+          lolaData,
+          w,
+          h,
+          vx + stepRad * nxAxis,
+          vy + stepRad * nyAxis,
+          vz + stepRad * nzAxis
+        );
+        const eN_minus = sampleEquirectBilinear(
+          lolaData,
+          w,
+          h,
+          vx - stepRad * nxAxis,
+          vy - stepRad * nyAxis,
+          vz - stepRad * nzAxis
+        );
 
-        heightNorm += (eC / 255 - 0.5) * 0.45 * lolaPoleFade;
-        dH_dEast += (((eR - eL) / 255) * 1.9 * lolaPoleFade) / cosLatClamped;
-        dH_dNorth += ((eU - eD) / 255) * 1.9 * lolaPoleFade;
+        heightNorm += (eC / 255 - 0.5) * 0.45 * lolaWeight;
+        dH_dEast += ((eE_plus - eE_minus) / 255) * 2.35 * lolaWeight;
+        dH_dNorth += ((eN_plus - eN_minus) / 255) * 2.35 * lolaWeight;
       }
 
-      // 3) Analytic 3D Spherical South Pole Crater Synthesis + isotropic 3D highland relief
-      let craterH = 0;
-      if (isPolarCraterZone) {
+      // 3) Uniform subtle global 3D micro-regolith normal grain across all latitudes (-90°..+90°)
+      const px0 = vx * nFreq;
+      const py0 = vy * nFreq;
+      const pz0 = vz * nFreq;
+      const nE =
+        fbm3D(px0 + ex * noiseEps * nFreq, py0, pz0 + ez * noiseEps * nFreq) -
+        fbm3D(px0 - ex * noiseEps * nFreq, py0, pz0 - ez * noiseEps * nFreq);
+      const nN =
+        fbm3D(px0 + nxAxis * noiseEps * nFreq, py0 + nyAxis * noiseEps * nFreq, pz0 + nzAxis * noiseEps * nFreq) -
+        fbm3D(px0 - nxAxis * noiseEps * nFreq, py0 - nyAxis * noiseEps * nFreq, pz0 - nzAxis * noiseEps * nFreq);
+      dH_dEast += (nE / (2 * noiseEps * nFreq)) * 0.035;
+      dH_dNorth += (nN / (2 * noiseEps * nFreq)) * 0.035;
+
+      // 4) Smoothly feathered South Pole crater relief matching LOLA texture character & contrast
+      if (polarBlend > 0.002) {
+        let craterH = 0;
         for (let ci = 0; ci < numCraters; ci++) {
           const c = craters[ci];
           const dot = vx * c.cx + vy * c.cy + vz * c.cz;
@@ -332,35 +487,15 @@ function paintLunarSurfaceTextures(
           if (Math.abs(dfDrNorm) > 1e-5) {
             const cDotE = c.cx * ex + c.cz * ez;
             const cDotN = c.cx * nxAxis + c.cy * nyAxis + c.cz * nzAxis;
-            const factor = (dfDrNorm * c.steepScale) / sinTheta;
+            const factor = (dfDrNorm * c.steepScale * polarBlend) / sinTheta;
             dH_dEast += factor * -cDotE;
             dH_dNorth += factor * -cDotN;
           }
         }
 
-        // Gentle isotropic 3D highland regolith undulation (non-periodic)
-        const nFreq = 18.0;
-        const px0 = vx * nFreq;
-        const py0 = vy * nFreq;
-        const pz0 = vz * nFreq;
-        const nE =
-          fbm3D(px0 + ex * noiseEps * nFreq, py0, pz0 + ez * noiseEps * nFreq) -
-          fbm3D(px0 - ex * noiseEps * nFreq, py0, pz0 - ez * noiseEps * nFreq);
-        const nN =
-          fbm3D(px0 + nxAxis * noiseEps * nFreq, py0 + nyAxis * noiseEps * nFreq, pz0 + nzAxis * noiseEps * nFreq) -
-          fbm3D(px0 - nxAxis * noiseEps * nFreq, py0 - nyAxis * noiseEps * nFreq, pz0 - nzAxis * noiseEps * nFreq);
-        const regolithH = fbm3D(px0, py0, pz0) * 0.05;
-        craterH += regolithH;
-        dH_dEast += (nE / (2 * noiseEps)) * 0.008;
-        dH_dNorth += (nN / (2 * noiseEps)) * 0.008;
-
-        // Ambient occlusion & sun-catching anorthosite rim shading inside monochrome albedo
-        if (craterH < -0.04) {
-          albedoLum *= Math.max(0.64, 1.0 + craterH * 0.30);
-        } else if (craterH > 0.02) {
-          albedoLum *= Math.min(1.22, 1.0 + craterH * 0.50);
-        }
-        heightNorm += craterH * 0.55;
+        const clampedShade = Math.max(-0.04, Math.min(0.04, craterH * 0.08)) * polarBlend;
+        albedoLum *= 1.0 + clampedShade;
+        heightNorm += craterH * 0.25 * polarBlend;
       }
 
       // Write monochrome albedo
@@ -370,21 +505,22 @@ function paintLunarSurfaceTextures(
       mData[p4 + 2] = finalAlbedo;
       mData[p4 + 3] = 255;
 
-      // Write combined bump grayscale (128 neutral)
+      // Write combined bump grayscale
       const finalBump = Math.min(255, Math.max(0, Math.round(128 + heightNorm * 110)));
       bData[p4] = finalBump;
       bData[p4 + 1] = finalBump;
       bData[p4 + 2] = finalBump;
       bData[p4 + 3] = 255;
 
-      // Encode normalized tangent-space normal vector (-dH_dE, -dH_dN, 1)
-      const tx = -dH_dEast;
-      const ty = -dH_dNorth;
-      const tz = 1.0;
-      const invLen = 1.0 / Math.sqrt(tx * tx + ty * ty + tz * tz);
-      nData[p4] = Math.min(255, Math.max(0, Math.round((tx * invLen * 0.5 + 0.5) * 255)));
-      nData[p4 + 1] = Math.min(255, Math.max(0, Math.round((ty * invLen * 0.5 + 0.5) * 255)));
-      nData[p4 + 2] = Math.min(255, Math.max(0, Math.round((tz * invLen * 0.5 + 0.5) * 255)));
+      // Encode true 3D Object-Space surface normal: normalize(P - (dH_dE * E + dH_dN * N))
+      // Eliminates tangent-space dFdx(vUv) UV singularity & radial starburst spikes at -90°/+90° poles
+      const nxObj = vx - (dH_dEast * ex + dH_dNorth * nxAxis);
+      const nyObj = vy - dH_dNorth * nyAxis;
+      const nzObj = vz - (dH_dEast * ez + dH_dNorth * nzAxis);
+      const invLen = 1.0 / Math.sqrt(nxObj * nxObj + nyObj * nyObj + nzObj * nzObj);
+      nData[p4] = Math.min(255, Math.max(0, Math.round((nxObj * invLen * 0.5 + 0.5) * 255)));
+      nData[p4 + 1] = Math.min(255, Math.max(0, Math.round((nyObj * invLen * 0.5 + 0.5) * 255)));
+      nData[p4 + 2] = Math.min(255, Math.max(0, Math.round((nzObj * invLen * 0.5 + 0.5) * 255)));
       nData[p4 + 3] = 255;
     }
   }
@@ -398,8 +534,8 @@ function paintLunarSurfaceTextures(
   normalTexture.needsUpdate = true;
 }
 
-// 2. Build 512x256 terrain grid combining LOLA elevation, South Pole craters, and preset site relief
-function buildTerrainGrid(sites: CandidateSite[], bumpImg?: HTMLImageElement): TerrainGrid {
+// 2. Build 512x256 seamless terrain grid using spherical tangent-step gradients & tight canonical site anchors
+function buildTerrainGrid(presetSites: CandidateSite[], bumpImg?: HTMLImageElement): TerrainGrid {
   const w = GRID_W;
   const h = GRID_H;
   const n = w * h;
@@ -431,6 +567,7 @@ function buildTerrainGrid(sites: CandidateSite[], bumpImg?: HTMLImageElement): T
   }
 
   const slopeDeg = new Float32Array(n);
+  const elevM = new Float32Array(n);
   const roughnessCode = new Uint8Array(n);
   const horizonCutoffDeg = new Float32Array(n);
   const earthCutoffDeg = new Float32Array(n);
@@ -438,42 +575,87 @@ function buildTerrainGrid(sites: CandidateSite[], bumpImg?: HTMLImageElement): T
   const ny = new Float32Array(n);
   const nz = new Float32Array(n);
 
+  const deg2Rad = Math.PI / 180;
+  const stepRad = 0.012;
+
   for (let y = 0; y < h; y++) {
     const lat = 90 - ((y + 0.5) / h) * 180;
     const absLat = Math.abs(lat);
-    const cosLat = Math.max(0.18, Math.cos((lat * Math.PI) / 180));
-    const yUp = Math.max(0, y - 1);
-    const yDn = Math.min(h - 1, y + 1);
+    const latRad = lat * deg2Rad;
+    const sinLat = Math.sin(latRad);
+    const cosLat = Math.cos(latRad);
+
+    let lolaWeight = 1.0;
+    if (absLat > 80) {
+      const t = Math.min(1, (absLat - 80) / 10);
+      lolaWeight = 1.0 - 0.75 * (t * t * (3 - 2 * t));
+    }
+
+    let polarBlend = 0.0;
+    if (lat < -68) {
+      const pt = Math.min(1, (-68 - lat) / 10);
+      polarBlend = pt * pt * (3 - 2 * pt);
+    }
 
     for (let x = 0; x < w; x++) {
-      const xLt = (x - 1 + w) % w;
-      const xRt = (x + 1) % w;
       const idx = y * w + x;
       const lon = ((x + 0.5) / w) * 360 - 180;
+      const lonRad = lon * deg2Rad;
+      const sinLon = Math.sin(lonRad);
+      const cosLon = Math.cos(lonRad);
 
-      const normal = latLonToCartesian(lat, lon, 1);
-      nx[idx] = normal.x;
-      ny[idx] = normal.y;
-      nz[idx] = normal.z;
+      const vx = cosLat * cosLon;
+      const vy = sinLat;
+      const vz = -cosLat * sinLon;
+      nx[idx] = vx;
+      ny[idx] = vy;
+      nz[idx] = vz;
+
+      const ex = -sinLon;
+      const ez = -cosLon;
+      const nxAxis = -sinLat * cosLon;
+      const nyAxis = cosLat;
+      const nzAxis = sinLat * sinLon;
 
       const eC = elev[idx];
-      const eL = elev[y * w + xLt];
-      const eR = elev[y * w + xRt];
-      const eU = elev[yUp * w + x];
-      const eD = elev[yDn * w + x];
+      const eE_plus = sampleFloatEquirectBilinear(elev, w, h, vx + stepRad * ex, vy, vz + stepRad * ez);
+      const eE_minus = sampleFloatEquirectBilinear(elev, w, h, vx - stepRad * ex, vy, vz - stepRad * ez);
+      const eN_plus = sampleFloatEquirectBilinear(
+        elev,
+        w,
+        h,
+        vx + stepRad * nxAxis,
+        vy + stepRad * nyAxis,
+        vz + stepRad * nzAxis
+      );
+      const eN_minus = sampleFloatEquirectBilinear(
+        elev,
+        w,
+        h,
+        vx - stepRad * nxAxis,
+        vy - stepRad * nyAxis,
+        vz - stepRad * nzAxis
+      );
 
-      const dx = (eR - eL) / (2 * cosLat);
-      const dy = (eD - eU) / 2;
+      const dx = (eE_plus - eE_minus) * 0.5 * lolaWeight;
+      const dy = (eN_plus - eN_minus) * 0.5 * lolaWeight;
       const grad = Math.sqrt(dx * dx + dy * dy);
-      const localMean = (eL + eR + eU + eD) * 0.25;
-      const laplacian = Math.abs(eC - localMean);
+      const localMean = (eE_plus + eE_minus + eN_plus + eN_minus) * 0.25;
+      const laplacian = Math.abs(eC - localMean) * lolaWeight;
 
-      const baseSlope = 1.6 + grad * 0.48 + (absLat > 78 ? 1.2 : 0);
-      const craterSample = lat <= -58 ? sampleCraterField(lat, lon) : null;
+      const baseSlope = 1.6 + grad * 0.48;
+      const craterSample = lat < -68 ? sampleCraterField(lat, lon) : null;
 
       slopeDeg[idx] = craterSample
-        ? Math.max(1.2, Math.min(28.0, baseSlope * 0.45 + craterSample.slopeDeg * 0.65))
+        ? Math.max(
+            1.0,
+            Math.min(28.0, baseSlope * (1 - polarBlend * 0.45) + craterSample.slopeDeg * polarBlend * 0.55)
+          )
         : Math.max(1.0, Math.min(22.0, baseSlope));
+
+      const lolaElevM = ((eC - 128) / 128) * 5200 * lolaWeight;
+      const polarElevM = craterSample ? craterSample.heightNorm * 4200 * polarBlend : 0;
+      elevM[idx] = Math.round(lolaElevM + polarElevM);
 
       roughnessCode[idx] =
         slopeDeg[idx] >= 13.5 || laplacian > 7.5 || grad > 22
@@ -487,13 +669,13 @@ function buildTerrainGrid(sites: CandidateSite[], bumpImg?: HTMLImageElement): T
     }
   }
 
-  // Blend Gaussian regional anchors around candidate/custom sites so the globe surface
-  // around each marker mirrors its surveyed terrain slope & topographic horizon prominence
-  for (const site of sites) {
+  // Tight local Gaussian anchors (sigma = 0.9°) ONLY for canonical sites so no giant polar blotches appear
+  const canonicalSites = presetSites.filter((s) => !s.id.startsWith('custom'));
+  for (const site of canonicalSites) {
     const sLat = site.coordinates.latitude;
     const sLon = site.coordinates.longitude;
     const cosSiteLat = Math.max(0.08, Math.cos((sLat * Math.PI) / 180));
-    const sigmaDeg = 4.6;
+    const sigmaDeg = 0.9;
     const sigma2 = 2 * sigmaDeg * sigmaDeg;
     const siteRough =
       site.terrain.roughness === 'HIGH' ? 2 : site.terrain.roughness === 'MODERATE' ? 1 : 0;
@@ -510,13 +692,13 @@ function buildTerrainGrid(sites: CandidateSite[], bumpImg?: HTMLImageElement): T
       siteEarthCutoff = Math.max(siteEarthCutoff, 10.8);
     }
 
-    const minY = Math.max(0, Math.floor(((90 - (sLat + 12)) / 180) * h));
-    const maxY = Math.min(h - 1, Math.ceil(((90 - (sLat - 12)) / 180) * h));
+    const minY = Math.max(0, Math.floor(((90 - (sLat + 3)) / 180) * h));
+    const maxY = Math.min(h - 1, Math.ceil(((90 - (sLat - 3)) / 180) * h));
 
     for (let y = minY; y <= maxY; y++) {
       const lat = 90 - ((y + 0.5) / h) * 180;
       const dLat = lat - sLat;
-      if (Math.abs(dLat) > 12) continue;
+      if (Math.abs(dLat) > 3) continue;
 
       for (let x = 0; x < w; x++) {
         const lon = ((x + 0.5) / w) * 360 - 180;
@@ -525,16 +707,17 @@ function buildTerrainGrid(sites: CandidateSite[], bumpImg?: HTMLImageElement): T
         if (dLon < -180) dLon += 360;
         const scaledDLon = dLon * cosSiteLat;
         const d2 = dLat * dLat + scaledDLon * scaledDLon;
-        if (d2 > 120) continue;
+        if (d2 > 4.0) continue;
 
         const weight = Math.exp(-d2 / sigma2);
         if (weight < 0.05) continue;
 
         const idx = y * w + x;
         slopeDeg[idx] = slopeDeg[idx] * (1 - weight) + site.terrain.slope_deg * weight;
+        elevM[idx] = Math.round(elevM[idx] * (1 - weight) + site.coordinates.elevation_m * weight);
         horizonCutoffDeg[idx] = horizonCutoffDeg[idx] * (1 - weight) + siteSunCutoff * weight;
         earthCutoffDeg[idx] = earthCutoffDeg[idx] * (1 - weight) + siteEarthCutoff * weight;
-        if (weight > 0.45) {
+        if (weight > 0.5) {
           roughnessCode[idx] = siteRough;
         }
       }
@@ -545,6 +728,7 @@ function buildTerrainGrid(sites: CandidateSite[], bumpImg?: HTMLImageElement): T
     width: w,
     height: h,
     slopeDeg,
+    elevM,
     roughnessCode,
     horizonCutoffDeg,
     earthCutoffDeg,
@@ -554,7 +738,7 @@ function buildTerrainGrid(sites: CandidateSite[], bumpImg?: HTMLImageElement): T
   };
 }
 
-// 3. Paint dynamic RYG landing assessment directly synced with exact 3D sun shadows + craters
+// 3. Paint dynamic RYG landing assessment synced with 3D sun shadows + smoothed polar DTE horizon
 function paintDynamicOverlayTexture(
   grid: TerrainGrid,
   canvas: HTMLCanvasElement,
@@ -603,7 +787,6 @@ function paintDynamicOverlayTexture(
 
     const dotEarth = Math.max(-1, Math.min(1, vx * earthVec.x + vy * earthVec.y + vz * earthVec.z));
     const effectiveEarthElev = Math.asin(dotEarth) * rad2Deg - earthCutoffDeg[i];
-    const hasLos = effectiveEarthElev > 0;
 
     const s = slopeDeg[i];
     const r = roughnessCode[i];
@@ -636,31 +819,37 @@ function paintDynamicOverlayTexture(
       }
     }
 
-    // 4. Direct-to-Earth (DTE) LOS check
-    if (!isRed && !hasLos) {
-      if (requiresLos) isRed = true;
-      else isYellow = true;
+    // 4. Smoothed Direct-to-Earth (DTE) LOS limb transition (-1.8° full grazing OK, -6.5°..-1.8° caution)
+    if (!isRed) {
+      if (effectiveEarthElev < -6.5) {
+        if (requiresLos) isRed = true;
+        else isYellow = true;
+      } else if (effectiveEarthElev < -1.8) {
+        isYellow = true;
+      }
     }
+
+    const reliefAlpha = Math.max(
+      175,
+      Math.min(215, Math.round(182 + (ill / 100) * 18 + Math.min(15, s * 0.9)))
+    );
 
     const p = i * 4;
     if (isRed) {
-      // Surgical Crimson #EF4444
       data[p] = 239;
       data[p + 1] = 68;
       data[p + 2] = 68;
-      data[p + 3] = 210;
+      data[p + 3] = reliefAlpha;
     } else if (isYellow) {
-      // Surgical Amber #F59E0B
       data[p] = 245;
       data[p + 1] = 158;
       data[p + 2] = 11;
-      data[p + 3] = 210;
+      data[p + 3] = reliefAlpha;
     } else {
-      // Surgical Emerald #10B981
       data[p] = 16;
       data[p + 1] = 185;
       data[p + 2] = 129;
-      data[p + 3] = 205;
+      data[p + 3] = Math.max(175, reliefAlpha - 6);
     }
   }
 
@@ -676,6 +865,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   lander,
   onProbeCoordinate,
   onChangeDateOffset,
+  onOpenTelemetryDrawer,
   leftDrawerOpen = false,
   rightDrawerOpen = false,
 }) => {
@@ -690,10 +880,19 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   const [lonInput, setLonInput] = useState<string>('0.00');
   const [labelInput, setLabelInput] = useState<string>('');
   const [coordError, setCoordError] = useState<string>('');
-  const [utcDateInput, setUtcDateInput] = useState<string>(() => formatMissionUtc(sunIlluminationOffset).dateStr);
-  const [utcTimeInput, setUtcTimeInput] = useState<string>(() => formatMissionUtc(sunIlluminationOffset).timeStr);
+  const [utcDateInput, setUtcDateInput] = useState<string>(
+    () => formatMissionUtc(sunIlluminationOffset).dateStr
+  );
+  const [utcTimeInput, setUtcTimeInput] = useState<string>(
+    () => formatMissionUtc(sunIlluminationOffset).timeStr
+  );
   const [hoveredSite, setHoveredSite] = useState<CandidateSite | null>(null);
-  const [projectedPins, setProjectedPins] = useState<ProjectedPin[]>([]);
+
+  // Imperative DOM refs for 60fps screen-space pin projection without React re-renders
+  const lineElsRef = useRef<Map<string, SVGLineElement>>(new Map());
+  const dotElsRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const labelElsRef = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const projectPinsNowRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const formatted = formatMissionUtc(sunIlluminationOffset);
@@ -711,6 +910,13 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       ),
     [selectedSite, sunIlluminationOffset]
   );
+
+  const selectedRiskTelemetry = useMemo(() => {
+    const illumPct = computeSiteIllumination(selectedSite, sunIlluminationOffset);
+    const hasLos = computeSiteEarthLos(selectedSite, sunIlluminationOffset);
+    const risk = assessLandingSiteRisk(selectedSite, illumPct, hasLos, lander);
+    return { illumPct, hasLos, risk };
+  }, [selectedSite, sunIlluminationOffset, lander]);
 
   const isProbeModeRef = useRef<boolean>(false);
   isProbeModeRef.current = isProbeMode;
@@ -736,8 +942,13 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     return map;
   }, [sites, sunIlluminationOffset, lander]);
 
-  const sitesSignature = useMemo(
-    () => sites.map((s) => `${s.id}:${s.coordinates.latitude.toFixed(2)},${s.coordinates.longitude.toFixed(2)}`).join('|'),
+  // Only canonical sites rebuild TerrainGrid; clicking custom spots on the Moon updates in <1ms
+  const canonicalSitesSignature = useMemo(
+    () =>
+      sites
+        .filter((s) => !s.id.startsWith('custom'))
+        .map((s) => `${s.id}:${s.coordinates.latitude.toFixed(2)},${s.coordinates.longitude.toFixed(2)}`)
+        .join('|'),
     [sites]
   );
   const builtSitesSigRef = useRef<string>('');
@@ -755,8 +966,16 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       return;
     }
     setCoordError('');
+    skipNextFlyRef.current = false;
+    const sampled = sampleTerrainGrid(terrainGridRef.current, parsedLat, parsedLon);
     if (onProbeCoordinateRef.current) {
-      onProbeCoordinateRef.current(Number(parsedLat.toFixed(2)), Number(parsedLon.toFixed(2)), labelInput.trim() || undefined);
+      onProbeCoordinateRef.current(
+        Number(parsedLat.toFixed(2)),
+        Number(parsedLon.toFixed(2)),
+        labelInput.trim() || undefined,
+        sampled.slopeDeg,
+        sampled.elevM
+      );
     }
     setIsCoordInputOpen(false);
     setLabelInput('');
@@ -793,7 +1012,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
-  const controlsRef = useRef<OrbitControls | null>(null);
   const moonMeshRef = useRef<THREE.Mesh | null>(null);
   const overlayMeshRef = useRef<THREE.Mesh | null>(null);
   const dirLightRef = useRef<THREE.DirectionalLight | null>(null);
@@ -806,44 +1024,73 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   const overlayTextureRef = useRef<THREE.CanvasTexture | null>(null);
   const bumpImgRef = useRef<HTMLImageElement | undefined>(undefined);
 
-  // Camera fly-to refs
-  const animTargetCamPos = useRef<THREE.Vector3 | null>(null);
-  const animTargetControlsTarget = useRef<THREE.Vector3 | null>(null);
+  // Gimbal-lock-free quaternion globe camera state
+  const camDistRef = useRef<number>(INITIAL_CAM_POS.length());
+  const targetCamDistRef = useRef<number>(INITIAL_CAM_POS.length());
+  const angVelRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const flyAnimRef = useRef<{
+    targetDir: THREE.Vector3;
+    targetUp: THREE.Vector3;
+    targetDist: number;
+  } | null>(null);
   const hasMountedFlyRef = useRef<boolean>(false);
+  const skipNextFlyRef = useRef<boolean>(false);
 
-  // Fly camera to a specific landing site
+  // Fly camera to a specific landing site centered smoothly over (0, 0, 0)
   const flyToSite = useCallback((site: CandidateSite) => {
-    if (!controlsRef.current || !cameraRef.current) return;
-    const siteSurfacePos = latLonToVector3(
-      site.coordinates.latitude,
-      site.coordinates.longitude,
-      MOON_RADIUS
-    );
-    const outwardNormal = siteSurfacePos.clone().normalize();
-    const targetCamPos = siteSurfacePos.clone().add(outwardNormal.multiplyScalar(2.4));
+    const normal = latLonToVector3(site.coordinates.latitude, site.coordinates.longitude, 1).normalize();
+    const rotY = moonMeshRef.current ? moonMeshRef.current.rotation.y : 0;
+    if (rotY !== 0) {
+      normal.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotY);
+    }
+    const targetDist = 5.8;
+    const targetUp = computeUpForNormal(normal);
 
-    animTargetCamPos.current = targetCamPos;
-    animTargetControlsTarget.current = siteSurfacePos.clone();
+    angVelRef.current = { x: 0, y: 0 };
+    targetCamDistRef.current = targetDist;
+    flyAnimRef.current = {
+      targetDir: normal,
+      targetUp,
+      targetDist,
+    };
     setIsZoomedIn(true);
   }, []);
 
   // Fly back out to orbital overview showing Near Side + South Pole
   const resetToGlobalView = useCallback(() => {
-    if (!controlsRef.current || !cameraRef.current) return;
-    animTargetCamPos.current = INITIAL_CAM_POS.clone();
-    animTargetControlsTarget.current = new THREE.Vector3(0, 0, 0);
+    const targetDist = INITIAL_CAM_POS.length();
+    const targetDir = INITIAL_CAM_POS.clone().normalize();
+    const targetUp = computeUpForNormal(targetDir);
+
+    angVelRef.current = { x: 0, y: 0 };
+    targetCamDistRef.current = targetDist;
+    flyAnimRef.current = {
+      targetDir,
+      targetUp,
+      targetDist,
+    };
     setIsZoomedIn(false);
   }, []);
 
   // Zoom directly over the Artemis South Pole cluster
   const zoomToSouthPole = useCallback(() => {
-    if (!controlsRef.current || !cameraRef.current) return;
-    animTargetCamPos.current = new THREE.Vector3(0.4, -5.8, -1.6);
-    animTargetControlsTarget.current = new THREE.Vector3(0, -MOON_RADIUS, 0);
+    const targetPos = new THREE.Vector3(0, -6.0, 0.4);
+    const targetDist = targetPos.length();
+    const targetDir = targetPos.clone().normalize();
+    const refUp = new THREE.Vector3(0, 0, 1);
+    const targetUp = refUp.addScaledVector(targetDir, -refUp.dot(targetDir)).normalize();
+
+    angVelRef.current = { x: 0, y: 0 };
+    targetCamDistRef.current = targetDist;
+    flyAnimRef.current = {
+      targetDir,
+      targetUp,
+      targetDist,
+    };
     setIsZoomedIn(true);
   }, []);
 
-  // Setup Three.js Scene
+  // Setup Three.js Scene + Quaternion Virtual-Globe Camera Controller
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
@@ -856,7 +1103,12 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
     camera.position.copy(INITIAL_CAM_POS);
+    camera.up.copy(computeUpForNormal(INITIAL_CAM_POS));
+    camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
+
+    camDistRef.current = INITIAL_CAM_POS.length();
+    targetCamDistRef.current = INITIAL_CAM_POS.length();
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
@@ -867,15 +1119,36 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    const controls = new OrbitControls(camera, renderer.domElement);
-    controls.enableDamping = true;
-    controls.dampingFactor = 0.08;
-    controls.minDistance = 4.2;
-    controls.maxDistance = 16.0;
-    controls.rotateSpeed = 0.65;
-    controls.zoomSpeed = 0.85;
-    controls.target.set(0, 0, 0);
-    controlsRef.current = controls;
+    // Reusable scratch objects for zero-GC quaternion rotation & projection
+    const _tmpForward = new THREE.Vector3();
+    const _tmpRight = new THREE.Vector3();
+    const _tmpUp = new THREE.Vector3();
+    const _tmpRadial = new THREE.Vector3();
+    const _qYaw = new THREE.Quaternion();
+    const _qPitch = new THREE.Quaternion();
+    const _qDelta = new THREE.Quaternion();
+
+    const rotateCameraByScreenDelta = (cam: THREE.PerspectiveCamera, dYaw: number, dPitch: number) => {
+      const dist = camDistRef.current || INITIAL_CAM_POS.length();
+      _tmpForward.copy(cam.position).negate().normalize();
+      _tmpRight.crossVectors(_tmpForward, cam.up);
+      if (_tmpRight.lengthSq() < 1e-6) {
+        _tmpRight.set(1, 0, 0);
+      } else {
+        _tmpRight.normalize();
+      }
+      _tmpUp.crossVectors(_tmpRight, _tmpForward).normalize();
+
+      _qYaw.setFromAxisAngle(_tmpUp, -dYaw);
+      _qPitch.setFromAxisAngle(_tmpRight, -dPitch);
+      _qDelta.multiplyQuaternions(_qYaw, _qPitch);
+
+      cam.position.applyQuaternion(_qDelta).setLength(dist);
+      cam.up.copy(_tmpUp).applyQuaternion(_qDelta).normalize();
+      _tmpRadial.copy(cam.position).normalize();
+      cam.up.addScaledVector(_tmpRadial, -cam.up.dot(_tmpRadial)).normalize();
+      cam.lookAt(0, 0, 0);
+    };
 
     // Monochrome lighting (crisp high-contrast solar light aligned to synodic ephemeris + minimal shadow fill)
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.06);
@@ -891,7 +1164,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     earthshineLight.position.set(-10, -2, -5);
     scene.add(earthshineLight);
 
-    // 1. Monochrome Lunar Base Sphere (LROC grayscale albedo + LOLA DEM + 3D Spherical South Pole Craters Normal Map)
+    // 1. Unified Monochrome Lunar Base Sphere (LROC + Spherical Tangent LOLA + Feathered Polar Craters)
     const monoCanvas = document.createElement('canvas');
     monoCanvas.width = SURF_TEX_W;
     monoCanvas.height = SURF_TEX_H;
@@ -905,6 +1178,9 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     const normalTexture = new THREE.CanvasTexture(normalCanvas);
     normalTexture.wrapS = THREE.RepeatWrapping;
     normalTexture.wrapT = THREE.ClampToEdgeWrapping;
+    normalTexture.generateMipmaps = false;
+    normalTexture.minFilter = THREE.LinearFilter;
+    normalTexture.magFilter = THREE.LinearFilter;
 
     const bumpCanvas = document.createElement('canvas');
     bumpCanvas.width = SURF_TEX_W;
@@ -917,7 +1193,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     let loadedBumpImg: HTMLImageElement | undefined;
     let isCleanedUp = false;
 
-    // Seed crisp South Pole crater relief immediately on mount before external JPEGs decode
     paintLunarSurfaceTextures(
       monoCanvas,
       monoTexture,
@@ -931,7 +1206,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     const moonMaterial = new THREE.MeshStandardMaterial({
       map: monoTexture,
       normalMap: normalTexture,
-      normalScale: new THREE.Vector2(1.85, 1.85),
+      normalMapType: THREE.ObjectSpaceNormalMap,
       roughness: 0.92,
       metalness: 0.0,
     });
@@ -965,7 +1240,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     overlayMeshRef.current = overlayMesh;
 
     // Seed terrain grid immediately, then refine once /textures/lroc_color_poles_4k.jpg & /textures/lola_bump_2k.jpg load
-    builtSitesSigRef.current = sitesSignature;
+    builtSitesSigRef.current = canonicalSitesSignature;
     terrainGridRef.current = buildTerrainGrid(sitesRef.current);
     paintDynamicOverlayTexture(
       terrainGridRef.current,
@@ -1038,52 +1313,74 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     scene.add(landingZonesGroup);
     landingZonesGroupRef.current = landingZonesGroup;
 
-    // 4. Raycaster for clicking pins or probing surface coordinates
+    // 4. Quaternion Pointer Drag + Scroll Zoom + Direct Surface Click Inspection
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
-    const handlePointerDown = (event: MouseEvent) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    let isPointerDown = false;
+    let activePointerId: number | null = null;
+    let didDrag = false;
+    let downX = 0;
+    let downY = 0;
+    let lastX = 0;
+    let lastY = 0;
+    let lastHoverSiteId: string | null = null;
+    let lastHoverCheck = 0;
 
-      raycaster.setFromCamera(mouse, camera);
+    const handlePointerDown = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      isPointerDown = true;
+      activePointerId = event.pointerId;
+      didDrag = false;
+      downX = event.clientX;
+      downY = event.clientY;
+      lastX = event.clientX;
+      lastY = event.clientY;
 
-      if (isProbeModeRef.current && moonMeshRef.current) {
-        const moonIntersects = raycaster.intersectObject(moonMeshRef.current);
-        if (moonIntersects.length > 0) {
-          const hit = moonIntersects[0].point;
-          const { latitude, longitude } = vector3ToLatLon(hit.x, hit.y, hit.z, MOON_RADIUS);
-          if (onProbeCoordinateRef.current) {
-            onProbeCoordinateRef.current(latitude, longitude);
-          }
-          setIsProbeMode(false);
-          return;
-        }
-      }
+      flyAnimRef.current = null;
+      angVelRef.current = { x: 0, y: 0 };
+      renderer.domElement.style.cursor = isProbeModeRef.current ? 'crosshair' : 'grabbing';
 
-      const intersects = raycaster.intersectObjects(pinsGroup.children, true);
-      if (intersects.length > 0) {
-        let obj: THREE.Object3D | null = intersects[0].object;
-        while (obj && !obj.userData?.site) {
-          obj = obj.parent;
-        }
-        if (obj && obj.userData?.site) {
-          onSelectSiteRef.current(obj.userData.site);
-        }
+      try {
+        renderer.domElement.setPointerCapture(event.pointerId);
+      } catch {
+        // Ignore if pointer capture is unavailable in synthetic tests
       }
     };
 
-    const handlePointerMove = (event: MouseEvent) => {
-      const rect = renderer.domElement.getBoundingClientRect();
-      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    const handlePointerMove = (event: PointerEvent) => {
+      if (isPointerDown) {
+        const totalDx = event.clientX - downX;
+        const totalDy = event.clientY - downY;
+        if (!didDrag && totalDx * totalDx + totalDy * totalDy > 16) {
+          didDrag = true;
+        }
+        const dx = event.clientX - lastX;
+        const dy = event.clientY - lastY;
+        lastX = event.clientX;
+        lastY = event.clientY;
+
+        const scale = Math.max(0.22, (camDistRef.current - MOON_RADIUS) / (MOON_RADIUS * 1.6)) * 0.0052;
+        const dYaw = dx * scale;
+        const dPitch = dy * scale;
+        rotateCameraByScreenDelta(camera, dYaw, dPitch);
+        angVelRef.current = { x: dYaw, y: dPitch };
+        return;
+      }
 
       if (isProbeModeRef.current) {
         renderer.domElement.style.cursor = 'crosshair';
         return;
       }
 
+      const now = performance.now();
+      if (now - lastHoverCheck < 45) return;
+      lastHoverCheck = now;
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObjects(pinsGroup.children, true);
       if (intersects.length > 0) {
@@ -1092,17 +1389,110 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           obj = obj.parent;
         }
         if (obj && obj.userData?.site) {
-          setHoveredSite(obj.userData.site);
+          const hitSite = obj.userData.site as CandidateSite;
+          if (lastHoverSiteId !== hitSite.id) {
+            lastHoverSiteId = hitSite.id;
+            setHoveredSite(hitSite);
+          }
           renderer.domElement.style.cursor = 'pointer';
           return;
         }
       }
-      setHoveredSite(null);
+
+      if (lastHoverSiteId !== null) {
+        lastHoverSiteId = null;
+        setHoveredSite(null);
+      }
       renderer.domElement.style.cursor = 'grab';
+    };
+
+    const handlePointerUp = (event: PointerEvent) => {
+      if (!isPointerDown) return;
+      const wasDrag = didDrag;
+      isPointerDown = false;
+      if (activePointerId !== null) {
+        try {
+          renderer.domElement.releasePointerCapture(activePointerId);
+        } catch {
+          // Ignore release failures
+        }
+        activePointerId = null;
+      }
+      renderer.domElement.style.cursor = isProbeModeRef.current ? 'crosshair' : 'grab';
+
+      if (event.type === 'pointercancel' || wasDrag) {
+        return;
+      }
+
+      angVelRef.current = { x: 0, y: 0 };
+
+      const rect = renderer.domElement.getBoundingClientRect();
+      mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+      mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      raycaster.setFromCamera(mouse, camera);
+
+      // 1. Check existing site pins first unless crosshair probe explicitly overrides
+      if (!isProbeModeRef.current) {
+        const pinHits = raycaster.intersectObjects(pinsGroup.children, true);
+        if (pinHits.length > 0) {
+          let obj: THREE.Object3D | null = pinHits[0].object;
+          while (obj && !obj.userData?.site) {
+            obj = obj.parent;
+          }
+          if (obj && obj.userData?.site) {
+            skipNextFlyRef.current = true;
+            onSelectSiteRef.current(obj.userData.site);
+            return;
+          }
+        }
+      }
+
+      // 2. Direct click anywhere on Moon surface -> sample LOLA grid & update selected assessment in place
+      if (moonMeshRef.current) {
+        const moonHits = raycaster.intersectObject(moonMeshRef.current);
+        if (moonHits.length > 0) {
+          const localHit = moonMeshRef.current.worldToLocal(moonHits[0].point.clone());
+          const { latitude, longitude } = vector3ToLatLon(
+            localHit.x,
+            localHit.y,
+            localHit.z,
+            MOON_RADIUS
+          );
+          const sampled = sampleTerrainGrid(terrainGridRef.current, latitude, longitude);
+          skipNextFlyRef.current = true;
+          if (onProbeCoordinateRef.current) {
+            onProbeCoordinateRef.current(
+              latitude,
+              longitude,
+              undefined,
+              sampled.slopeDeg,
+              sampled.elevM
+            );
+          }
+          if (isProbeModeRef.current) {
+            setIsProbeMode(false);
+          }
+        }
+      }
+    };
+
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      flyAnimRef.current = null;
+      const factor = Math.max(0.75, Math.min(1.35, 1 + event.deltaY * 0.001));
+      const nextDist = Math.max(
+        MIN_CAM_DIST,
+        Math.min(MAX_CAM_DIST, targetCamDistRef.current * factor)
+      );
+      targetCamDistRef.current = nextDist;
+      setIsZoomedIn(nextDist < 7.2);
     };
 
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
+    renderer.domElement.addEventListener('pointerup', handlePointerUp);
+    renderer.domElement.addEventListener('pointercancel', handlePointerUp);
+    renderer.domElement.addEventListener('wheel', handleWheel, { passive: false });
 
     // 5. ResizeObserver
     const handleResize = () => {
@@ -1120,18 +1510,25 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     });
     resizeObserver.observe(container);
 
-    // 6. Screen-space projection for clean SpaceX telemetry markers & non-overlapping leader lines
-    let lastProjectionSig = '';
+    // 6. Imperative 60fps DOM Projection for Telemetry Markers & Non-Overlapping Leader Lines
     const camToSite = new THREE.Vector3();
     const worldPos = new THREE.Vector3();
     const surfaceNormal = new THREE.Vector3();
     const ndc = new THREE.Vector3();
 
-    const computeProjectedPins = () => {
+    interface PinLayout {
+      id: string;
+      sx: number;
+      sy: number;
+      labelX: number;
+      labelY: number;
+      align: 'left' | 'right';
+    }
+
+    const updateProjectedPinsDOM = () => {
       const w = container.clientWidth || window.innerWidth;
       const h = container.clientHeight || window.innerHeight;
       const currentSites = sitesRef.current;
-      const metricsMap = siteMetricsRef.current;
 
       const leftOpen = leftDrawerOpenRef.current && w >= 1024;
       const rightOpen = rightDrawerOpenRef.current && w >= 1024;
@@ -1140,7 +1537,9 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       const safeTop = leftOpen && rightOpen ? 104 : 66;
       const safeBottom = leftOpen && rightOpen ? h - 104 : h - 74;
 
-      const raw: ProjectedPin[] = [];
+      const visiblePins: PinLayout[] = [];
+      const visibleIds = new Set<string>();
+
       for (const site of currentSites) {
         const localPos = latLonToVector3(
           site.coordinates.latitude,
@@ -1151,7 +1550,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         surfaceNormal.copy(worldPos).normalize();
         camToSite.copy(camera.position).sub(worldPos).normalize();
 
-        // Hide markers behind the Moon horizon
         if (surfaceNormal.dot(camToSite) <= 0.02) continue;
 
         ndc.copy(worldPos).project(camera);
@@ -1160,7 +1558,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         const sx = (ndc.x * 0.5 + 0.5) * w;
         const sy = (-ndc.y * 0.5 + 0.5) * h;
 
-        // Skip pins behind open side drawers or behind top/bottom HUD control strips
         if (sx < safeLeft || sx > safeRight || sy < safeTop || sy > safeBottom) {
           continue;
         }
@@ -1175,16 +1572,16 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           offset.align === 'left'
             ? Math.max(safeLeft + 148, Math.min(safeRight - 8, sx + offset.dx))
             : Math.max(safeLeft + 8, Math.min(safeRight - 148, sx + offset.dx));
-        const labelY = Math.max(safeTop + 8, Math.min(safeBottom - 8, sy + offset.dy));
-        const metric = metricsMap.get(site.id) || {
-          status: 'GREEN' as RiskLevel,
-          illumPct: site.defaultIlluminationPct,
-        };
+        let labelY = Math.max(safeTop + 8, Math.min(safeBottom - 8, sy + offset.dy));
 
-        raw.push({
-          site,
-          status: metric.status,
-          illumPct: metric.illumPct,
+        // Keep labels clear of the bottom-left Surface Coordinates & Risk HUD Card
+        if (labelX < safeLeft + 345 && labelY > h - 245) {
+          labelY = Math.max(safeTop + 8, h - 250);
+        }
+
+        visibleIds.add(site.id);
+        visiblePins.push({
+          id: site.id,
           sx,
           sy,
           labelX,
@@ -1193,8 +1590,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         });
       }
 
-      // Vertical de-overlapping pass for left and right clusters so labels never collide
-      const resolveOverlap = (items: ProjectedPin[]) => {
+      const resolveOverlap = (items: PinLayout[]) => {
         items.sort((a, b) => a.labelY - b.labelY);
         const minGap = 28;
         for (let i = 1; i < items.length; i++) {
@@ -1207,64 +1603,122 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         }
       };
 
-      resolveOverlap(raw.filter((p) => p.align === 'left'));
-      resolveOverlap(raw.filter((p) => p.align === 'right'));
+      resolveOverlap(visiblePins.filter((p) => p.align === 'left'));
+      resolveOverlap(visiblePins.filter((p) => p.align === 'right'));
 
-      const sig = `${leftOpen ? 1 : 0}:${rightOpen ? 1 : 0}|` + raw
-        .map(
-          (p) =>
-            `${p.site.id}:${p.status}:${p.illumPct}:${Math.round(p.sx)}:${Math.round(p.sy)}:${Math.round(p.labelY)}`
-        )
-        .join('|');
+      for (const p of visiblePins) {
+        const dotEl = dotElsRef.current.get(p.id);
+        const labelEl = labelElsRef.current.get(p.id);
+        const lineEl = lineElsRef.current.get(p.id);
 
-      if (sig !== lastProjectionSig) {
-        lastProjectionSig = sig;
-        setProjectedPins(raw);
-      }
-    };
-
-    // 7. Render Loop (strictly non-blinking)
-    let animId: number;
-    const animate = () => {
-      animId = requestAnimationFrame(animate);
-
-      if (animTargetCamPos.current && animTargetControlsTarget.current) {
-        camera.position.lerp(animTargetCamPos.current, 0.06);
-        controls.target.lerp(animTargetControlsTarget.current, 0.06);
-
-        if (camera.position.distanceTo(animTargetCamPos.current) < 0.04) {
-          animTargetCamPos.current = null;
-          animTargetControlsTarget.current = null;
+        if (dotEl) {
+          dotEl.style.display = 'flex';
+          dotEl.style.transform = `translate3d(${p.sx.toFixed(1)}px, ${p.sy.toFixed(1)}px, 0) translate(-50%, -50%)`;
+        }
+        if (labelEl) {
+          labelEl.style.display = 'flex';
+          const txPct = p.align === 'left' ? '-100%' : '0%';
+          labelEl.style.transform = `translate3d(${p.labelX.toFixed(1)}px, ${p.labelY.toFixed(1)}px, 0) translate(${txPct}, -50%)`;
+        }
+        if (lineEl) {
+          lineEl.style.display = 'inline';
+          lineEl.setAttribute('x1', p.sx.toFixed(1));
+          lineEl.setAttribute('y1', p.sy.toFixed(1));
+          lineEl.setAttribute('x2', p.labelX.toFixed(1));
+          lineEl.setAttribute('y2', p.labelY.toFixed(1));
         }
       }
 
-      if (autoRotateRef.current && !animTargetCamPos.current) {
+      for (const site of currentSites) {
+        if (visibleIds.has(site.id)) continue;
+        const dotEl = dotElsRef.current.get(site.id);
+        const labelEl = labelElsRef.current.get(site.id);
+        const lineEl = lineElsRef.current.get(site.id);
+        if (dotEl) dotEl.style.display = 'none';
+        if (labelEl) labelEl.style.display = 'none';
+        if (lineEl) lineEl.style.display = 'none';
+      }
+    };
+    projectPinsNowRef.current = updateProjectedPinsDOM;
+
+    // 7. Render Loop (60fps zero-React-rerender quaternion orbit + zoom damping)
+    let animId: number;
+    const _curDir = new THREE.Vector3();
+    const _radNorm = new THREE.Vector3();
+
+    const animate = () => {
+      animId = requestAnimationFrame(animate);
+
+      const fly = flyAnimRef.current;
+      if (fly) {
+        _curDir.copy(camera.position).normalize();
+        _curDir.lerp(fly.targetDir, 0.08).normalize();
+        camDistRef.current += (fly.targetDist - camDistRef.current) * 0.08;
+        camera.position.copy(_curDir).multiplyScalar(camDistRef.current);
+
+        camera.up.lerp(fly.targetUp, 0.08).normalize();
+        _radNorm.copy(camera.position).normalize();
+        camera.up.addScaledVector(_radNorm, -camera.up.dot(_radNorm)).normalize();
+        camera.lookAt(0, 0, 0);
+
+        if (
+          _curDir.distanceTo(fly.targetDir) < 0.008 &&
+          Math.abs(camDistRef.current - fly.targetDist) < 0.02
+        ) {
+          camera.position.copy(fly.targetDir).multiplyScalar(fly.targetDist);
+          camera.up.copy(fly.targetUp);
+          camera.lookAt(0, 0, 0);
+          camDistRef.current = fly.targetDist;
+          flyAnimRef.current = null;
+        }
+      } else {
+        // Smooth wheel zoom interpolation
+        if (Math.abs(targetCamDistRef.current - camDistRef.current) > 0.002) {
+          camDistRef.current += (targetCamDistRef.current - camDistRef.current) * 0.14;
+          camera.position.setLength(camDistRef.current);
+        }
+
+        // Smooth drag momentum damping after mouse release
+        if (!isPointerDown) {
+          const vx = angVelRef.current.x;
+          const vy = angVelRef.current.y;
+          if (Math.abs(vx) > 1e-5 || Math.abs(vy) > 1e-5) {
+            rotateCameraByScreenDelta(camera, vx, vy);
+            angVelRef.current.x = vx * 0.90;
+            angVelRef.current.y = vy * 0.90;
+          }
+        }
+      }
+
+      if (autoRotateRef.current && !flyAnimRef.current && !isPointerDown) {
         moonMesh.rotation.y += 0.0018;
         overlayMesh.rotation.y += 0.0018;
         pinsGroup.rotation.y += 0.0018;
         landingZonesGroup.rotation.y += 0.0018;
       }
 
-      controls.update();
       renderer.render(scene, camera);
-      computeProjectedPins();
+      updateProjectedPinsDOM();
     };
     animate();
 
     return () => {
       isCleanedUp = true;
+      projectPinsNowRef.current = null;
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       if (renderer.domElement) {
         renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
         renderer.domElement.removeEventListener('pointermove', handlePointerMove);
+        renderer.domElement.removeEventListener('pointerup', handlePointerUp);
+        renderer.domElement.removeEventListener('pointercancel', handlePointerUp);
+        renderer.domElement.removeEventListener('wheel', handleWheel);
       }
       monoTexture.dispose();
       normalTexture.dispose();
       bumpTexture.dispose();
       overlayTexture.dispose();
-      controls.dispose();
       renderer.dispose();
       container.innerHTML = '';
     };
@@ -1280,15 +1734,15 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     mat.needsUpdate = true;
   }, [showAssessmentOverlay, overlayOpacity]);
 
-  // Recompute RYG Assessment Overlay whenever landing parameters, sites, or synodic date/time changes
+  // Recompute RYG Assessment Overlay when landing parameters, canonical sites, or UTC time changes
   useEffect(() => {
     const canvas = overlayCanvasRef.current;
     const tex = overlayTextureRef.current;
     if (!canvas || !tex) return;
 
-    if (!terrainGridRef.current || builtSitesSigRef.current !== sitesSignature) {
-      builtSitesSigRef.current = sitesSignature;
-      terrainGridRef.current = buildTerrainGrid(sites, bumpImgRef.current);
+    if (!terrainGridRef.current || builtSitesSigRef.current !== canonicalSitesSignature) {
+      builtSitesSigRef.current = canonicalSitesSignature;
+      terrainGridRef.current = buildTerrainGrid(sitesRef.current, bumpImgRef.current);
     }
 
     paintDynamicOverlayTexture(
@@ -1298,7 +1752,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       lander,
       sunIlluminationOffset
     );
-  }, [lander, sunIlluminationOffset, sites, sitesSignature]);
+  }, [lander, sunIlluminationOffset, canonicalSitesSignature]);
 
   // Align 3D Sunlight Terminator Vector identically with ephemeris model & RYG shadows
   useEffect(() => {
@@ -1329,7 +1783,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       );
       const normal = pos.clone().normalize();
 
-      // Invisible surface hit target for 3D raycasting
       const hitGeo = new THREE.SphereGeometry(0.11, 8, 8);
       const hitMat = new THREE.MeshBasicMaterial({ visible: false });
       const hitMesh = new THREE.Mesh(hitGeo, hitMat);
@@ -1337,7 +1790,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       hitMesh.userData = { site };
       pinsGroup.add(hitMesh);
 
-      // Static thin ring around the currently selected site ONLY
       if (isSelected) {
         const ringGeo = new THREE.RingGeometry(0.095, 0.11, 48);
         const ringMat = new THREE.MeshBasicMaterial({
@@ -1355,10 +1807,19 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     });
   }, [sites, selectedSite]);
 
-  // Only fly camera when user changes selectedSite after initial orbital overview
+  // Ensure newly mounted or re-rendered pin nodes position immediately
+  useEffect(() => {
+    projectPinsNowRef.current?.();
+  }, [sites, selectedSite, siteMetricsMap, leftDrawerOpen, rightDrawerOpen]);
+
+  // Fly camera on programmatic selection changes (drawer / COORDS popover); keep steady on direct surface click
   useEffect(() => {
     if (!hasMountedFlyRef.current) {
       hasMountedFlyRef.current = true;
+      return;
+    }
+    if (skipNextFlyRef.current) {
+      skipNextFlyRef.current = false;
       return;
     }
     flyToSite(selectedSite);
@@ -1370,52 +1831,72 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     return '#10B981';
   };
 
+  const statusLabel = (status: RiskLevel) => {
+    if (status === 'RED') return 'NO-GO';
+    if (status === 'YELLOW') return 'CAUTION';
+    return 'GO';
+  };
+
   const hoveredMetric = hoveredSite ? siteMetricsMap.get(hoveredSite.id) : null;
+  const maxSlopeLimit = lander ? lander.maxSlopeDeg : 15;
+  const minIllumLimit = lander ? lander.minIlluminationPct : 70;
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-black flex flex-col">
       {/* 3D WebGL Canvas Mount Container */}
       <div ref={mountRef} className="w-full h-full flex-1 cursor-grab active:cursor-grabbing" />
 
-      {/* Projected Screen-Space SpaceX Telemetry Markers (Non-Blinking) */}
+      {/* Projected Screen-Space SpaceX Telemetry Markers (Imperatively positioned at 60fps) */}
       <div className="pointer-events-none absolute inset-0 overflow-hidden z-10">
         {/* SVG Leader Lines */}
         <svg className="absolute inset-0 w-full h-full">
-          {projectedPins.map((pin) => {
-            const isSelected = pin.site.id === selectedSite.id;
+          {sites.map((site) => {
+            const isSelected = site.id === selectedSite.id;
             return (
               <line
-                key={`line-${pin.site.id}`}
-                x1={pin.sx}
-                y1={pin.sy}
-                x2={pin.labelX}
-                y2={pin.labelY}
+                key={`line-${site.id}`}
+                ref={(el) => {
+                  if (el) lineElsRef.current.set(site.id, el);
+                  else lineElsRef.current.delete(site.id);
+                }}
                 stroke={isSelected ? 'rgba(255, 255, 255, 0.78)' : 'rgba(255, 255, 255, 0.32)'}
                 strokeWidth={1}
+                style={{ display: 'none' }}
               />
             );
           })}
         </svg>
 
         {/* Crisp Telemetry Dots + Static Ring (Selected Only) + Offset Labels */}
-        {projectedPins.map((pin) => {
-          const isSelected = pin.site.id === selectedSite.id;
-          const hex = statusHex(pin.status);
-          const shortName = SHORT_NAMES[pin.site.id] || pin.site.name.toUpperCase().slice(0, 12);
+        {sites.map((site) => {
+          const isSelected = site.id === selectedSite.id;
+          const metric = siteMetricsMap.get(site.id) || {
+            status: 'GREEN' as RiskLevel,
+            illumPct: site.defaultIlluminationPct,
+            hasLos: site.defaultEarthLos,
+          };
+          const hex = statusHex(metric.status);
+          const customShortLabel =
+            site.id === 'custom_surface_target'
+              ? `${Math.abs(site.coordinates.latitude).toFixed(1)}°${site.coordinates.latitude >= 0 ? 'N' : 'S'} ${Math.abs(site.coordinates.longitude).toFixed(1)}°${site.coordinates.longitude >= 0 ? 'E' : 'W'}`
+              : site.name.toUpperCase().slice(0, 14);
+          const shortName = SHORT_NAMES[site.id] || customShortLabel;
 
           return (
-            <React.Fragment key={pin.site.id}>
+            <React.Fragment key={site.id}>
               {/* 7px Dot with 1px white border + optional static selection ring */}
               <div
-                style={{
-                  position: 'absolute',
-                  left: pin.sx,
-                  top: pin.sy,
-                  transform: 'translate(-50%, -50%)',
+                ref={(el) => {
+                  if (el) dotElsRef.current.set(site.id, el);
+                  else dotElsRef.current.delete(site.id);
                 }}
-                className="pointer-events-auto cursor-pointer flex items-center justify-center"
-                onClick={() => onSelectSite(pin.site)}
-                onMouseEnter={() => setHoveredSite(pin.site)}
+                style={{ display: 'none' }}
+                className="pointer-events-auto cursor-pointer absolute top-0 left-0 items-center justify-center"
+                onClick={() => {
+                  skipNextFlyRef.current = true;
+                  onSelectSite(site);
+                }}
+                onMouseEnter={() => setHoveredSite(site)}
                 onMouseLeave={() => setHoveredSite(null)}
               >
                 {isSelected && (
@@ -1433,17 +1914,18 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
               {/* Crisp Carbon Leader-Line Label */}
               <button
                 type="button"
-                onClick={() => onSelectSite(pin.site)}
-                onMouseEnter={() => setHoveredSite(pin.site)}
-                onMouseLeave={() => setHoveredSite(null)}
-                style={{
-                  position: 'absolute',
-                  left: pin.labelX,
-                  top: pin.labelY,
-                  transform:
-                    pin.align === 'left' ? 'translate(-100%, -50%)' : 'translate(0, -50%)',
+                ref={(el) => {
+                  if (el) labelElsRef.current.set(site.id, el);
+                  else labelElsRef.current.delete(site.id);
                 }}
-                className={`pointer-events-auto cursor-pointer flex items-center gap-1.5 px-2 py-0.5 rounded-[2px] border font-mono text-[10px] uppercase tracking-wider whitespace-nowrap transition-colors ${
+                onClick={() => {
+                  skipNextFlyRef.current = true;
+                  onSelectSite(site);
+                }}
+                onMouseEnter={() => setHoveredSite(site)}
+                onMouseLeave={() => setHoveredSite(null)}
+                style={{ display: 'none' }}
+                className={`pointer-events-auto cursor-pointer absolute top-0 left-0 items-center gap-1.5 px-2 py-0.5 rounded-[2px] border font-mono text-[10px] uppercase tracking-wider whitespace-nowrap transition-colors ${
                   isSelected
                     ? 'bg-[#090A0D] border-white/60 text-white'
                     : 'bg-[#090A0D]/90 border-white/[0.14] text-[#9CA3AF] hover:text-white hover:border-white/35'
@@ -1455,7 +1937,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
                 />
                 <span className="font-semibold text-white">{shortName}</span>
                 <span className="text-[#6B7280] tabular-nums">
-                  {pin.site.terrain.slope_deg.toFixed(1)}° · {pin.illumPct}%
+                  {site.terrain.slope_deg.toFixed(1)}° · {metric.illumPct}%
                 </span>
               </button>
             </React.Fragment>
@@ -1551,10 +2033,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
                 ? 'bg-white text-black font-bold border-white'
                 : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
             }`}
-            title="Click anywhere on the lunar surface to probe local terrain parameters"
+            title="Clicking anywhere on the Moon inspects coordinates & risk (toggle precision crosshair cursor)"
           >
             <MapPin className="w-3.5 h-3.5" />
-            <span>{isProbeMode ? 'CLICK SURFACE' : 'PROBE'}</span>
+            <span>{isProbeMode ? 'CROSSHAIR ON' : 'CLICK MOON'}</span>
           </button>
 
           <button
@@ -1611,7 +2093,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label htmlFor="hud-coord-lat" className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1">
+                  <label
+                    htmlFor="hud-coord-lat"
+                    className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1"
+                  >
                     LAT (-90..90)
                   </label>
                   <input
@@ -1626,7 +2111,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
                   />
                 </div>
                 <div>
-                  <label htmlFor="hud-coord-lon" className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1">
+                  <label
+                    htmlFor="hud-coord-lon"
+                    className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1"
+                  >
                     LON (-180..180)
                   </label>
                   <input
@@ -1643,7 +2131,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
               </div>
 
               <div>
-                <label htmlFor="hud-coord-label" className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1">
+                <label
+                  htmlFor="hud-coord-label"
+                  className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1"
+                >
                   SITE DESIGNATION (OPT)
                 </label>
                 <input
@@ -1673,11 +2164,11 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         </div>
       </div>
 
-      {/* Active Probe Banner */}
+      {/* Precision Probe Cursor Banner */}
       {isProbeMode && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-[#090A0D]/95 border border-white/40 px-3.5 py-1 rounded-[2px] text-[10px] font-mono uppercase tracking-wider text-white flex items-center gap-2 z-20 pointer-events-none">
           <MapPin className="w-3.5 h-3.5 text-white" />
-          <span>Click anywhere on lunar surface to probe coordinates</span>
+          <span>Precision mode active — click anywhere on the Moon surface</span>
         </div>
       )}
 
@@ -1699,6 +2190,143 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           </div>
         </div>
       )}
+
+      {/* On-Viewport Selected Surface Area: Coordinates & 4-Factor Risk Assessment HUD Card */}
+      <div
+        data-testid="surface-risk-hud"
+        className={`pointer-events-auto absolute bottom-14 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} w-[312px] sm:w-[336px] max-w-[calc(100vw-24px)] bg-[#090A0D]/95 backdrop-blur-md border border-white/[0.16] rounded-[2px] p-3 font-mono z-20 transition-all duration-300`}
+      >
+        {/* Header: Probed/Selected Area + Overall Risk Verdict Badge */}
+        <div className="flex items-start justify-between gap-2 pb-2 border-b border-white/[0.12]">
+          <div className="min-w-0">
+            <div className="text-[9px] text-[#6B7280] uppercase tracking-widest">
+              SURFACE INSPECTION // {selectedSite.region}
+            </div>
+            <div className="text-xs font-bold text-white uppercase tracking-wider truncate mt-0.5">
+              {selectedSite.name}
+            </div>
+          </div>
+          <span
+            style={{
+              color: statusHex(selectedRiskTelemetry.risk.overall_status),
+              borderColor: `${statusHex(selectedRiskTelemetry.risk.overall_status)}66`,
+              backgroundColor: `${statusHex(selectedRiskTelemetry.risk.overall_status)}1A`,
+            }}
+            className="shrink-0 px-2 py-0.5 rounded-[2px] border text-[10px] font-bold uppercase tracking-wider tabular-nums"
+          >
+            {statusLabel(selectedRiskTelemetry.risk.overall_status)}
+          </span>
+        </div>
+
+        {/* Exact Selenographic Coordinates & Elevation Strip */}
+        <div className="grid grid-cols-3 gap-1.5 py-2 border-b border-white/[0.10] text-[10px] tabular-nums">
+          <div className="bg-black/70 border border-white/[0.10] rounded-[2px] px-2 py-1">
+            <span className="block text-[8px] text-[#6B7280] uppercase tracking-widest">LAT</span>
+            <span className="text-white font-semibold">
+              {selectedSite.coordinates.latitude >= 0 ? '+' : ''}
+              {selectedSite.coordinates.latitude.toFixed(2)}°
+            </span>
+          </div>
+          <div className="bg-black/70 border border-white/[0.10] rounded-[2px] px-2 py-1">
+            <span className="block text-[8px] text-[#6B7280] uppercase tracking-widest">LON</span>
+            <span className="text-white font-semibold">
+              {selectedSite.coordinates.longitude >= 0 ? '+' : ''}
+              {selectedSite.coordinates.longitude.toFixed(2)}°
+            </span>
+          </div>
+          <div className="bg-black/70 border border-white/[0.10] rounded-[2px] px-2 py-1">
+            <span className="block text-[8px] text-[#6B7280] uppercase tracking-widest">ELEV</span>
+            <span className="text-white font-semibold">
+              {selectedSite.coordinates.elevation_m >= 0 ? '+' : ''}
+              {selectedSite.coordinates.elevation_m}M
+            </span>
+          </div>
+        </div>
+
+        {/* 4-Factor Risk Assessment Grid */}
+        <div className="grid grid-cols-2 gap-1.5 py-2 text-[10px] tabular-nums">
+          <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
+            <div>
+              <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
+                SLOPE (≤{maxSlopeLimit.toFixed(0)}°)
+              </span>
+              <span className="text-white font-semibold">
+                {selectedSite.terrain.slope_deg.toFixed(1)}°
+              </span>
+            </div>
+            <span
+              style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[0].level) }}
+              className="w-2 h-2 rounded-full shrink-0 border border-white/50"
+            />
+          </div>
+
+          <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
+            <div>
+              <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
+                FLUX (≥{minIllumLimit}%)
+              </span>
+              <span className="text-white font-semibold">
+                {selectedRiskTelemetry.illumPct}% ({selectedSolarTelemetry.effectiveSunElevDeg >= 0 ? '+' : ''}
+                {selectedSolarTelemetry.effectiveSunElevDeg.toFixed(1)}°)
+              </span>
+            </div>
+            <span
+              style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[2].level) }}
+              className="w-2 h-2 rounded-full shrink-0 border border-white/50"
+            />
+          </div>
+
+          <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
+            <div>
+              <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
+                ROUGHNESS
+              </span>
+              <span className="text-white font-semibold">{selectedSite.terrain.roughness}</span>
+            </div>
+            <span
+              style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[1].level) }}
+              className="w-2 h-2 rounded-full shrink-0 border border-white/50"
+            />
+          </div>
+
+          <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
+            <div>
+              <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
+                EARTH DTE
+              </span>
+              <span className="text-white font-semibold">
+                {selectedRiskTelemetry.hasLos ? 'DIRECT LINK' : 'OCCLUDED'}
+              </span>
+            </div>
+            <span
+              style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[3].level) }}
+              className="w-2 h-2 rounded-full shrink-0 border border-white/50"
+            />
+          </div>
+        </div>
+
+        {/* Actions: Focus Cam / Full Analysis */}
+        <div className="flex items-center gap-1.5 pt-1">
+          <button
+            type="button"
+            onClick={() => flyToSite(selectedSite)}
+            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.16] rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-white transition"
+          >
+            <Focus className="w-3 h-3" />
+            <span>FOCUS CAM</span>
+          </button>
+          {onOpenTelemetryDrawer && (
+            <button
+              type="button"
+              onClick={onOpenTelemetryDrawer}
+              className="flex-1 flex items-center justify-center gap-1.5 py-1.5 bg-white hover:bg-neutral-200 rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-black transition"
+            >
+              <BarChart3 className="w-3 h-3" />
+              <span>FULL ANALYSIS</span>
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* Bottom HUD: Dynamic Overlay Legend, Mission UTC Clock Bar & Selected Site Coordinates */}
       <div
