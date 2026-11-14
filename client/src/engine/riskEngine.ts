@@ -16,20 +16,14 @@ export function evaluateSlope(slopeDeg: number, lander?: LanderProfile): RiskFac
   const maxLimit = lander ? lander.maxSlopeDeg : RISK_THRESHOLDS.slope.yellowMax;
   const cautionThreshold = lander ? lander.maxSlopeDeg * 0.75 : RISK_THRESHOLDS.slope.greenMax;
 
-  let explanation = lander
-    ? `Safe: ${slopeDeg.toFixed(1)}° is well within ${lander.name} structural limit (<${maxLimit}°).`
-    : `Safe: ${slopeDeg.toFixed(1)}° is well within landing gear tilt limits (<5°).`;
+  let explanation = `Safe: ${slopeDeg.toFixed(1)}° is well within allowable slope threshold (<${maxLimit.toFixed(1)}°).`;
 
   if (slopeDeg > maxLimit) {
     level = 'RED';
-    explanation = lander
-      ? `Hazard: ${slopeDeg.toFixed(1)}° exceeds ${lander.name} maximum certified slope limit (${maxLimit}°). Severe tip-over risk.`
-      : `Hazard: ${slopeDeg.toFixed(1)}° exceeds safe tilt margin (>15°), severe tip-over risk.`;
+    explanation = `Hazard: ${slopeDeg.toFixed(1)}° exceeds allowable slope limit (${maxLimit.toFixed(1)}°). Severe tip-over risk.`;
   } else if (slopeDeg >= cautionThreshold) {
     level = 'YELLOW';
-    explanation = lander
-      ? `Caution: ${slopeDeg.toFixed(1)}° approaches ${lander.name} operational limit (${maxLimit}°). Requires precision landing.`
-      : `Caution: ${slopeDeg.toFixed(1)}° requires precise touchdown terrain clearance.`;
+    explanation = `Caution: ${slopeDeg.toFixed(1)}° approaches operational limit (${maxLimit.toFixed(1)}°). Requires precision landing.`;
   }
 
   return {
@@ -75,14 +69,10 @@ export function evaluateIllumination(illuminationPct: number, lander?: LanderPro
 
   if (illuminationPct < criticalMin) {
     level = 'RED';
-    explanation = lander
-      ? `Critical shadow (${illuminationPct}%). Below ${lander.name} minimum survivable thermal/power limit (${minRequired}%).`
-      : `Critical shadow (${illuminationPct}% sunlight). High risk of battery drain and cryogenic freeze.`;
+    explanation = `Critical shadow (${illuminationPct}%). Below minimum illumination threshold (${minRequired}%). High risk of battery drain and cryogenic freeze.`;
   } else if (illuminationPct < minRequired) {
     level = 'YELLOW';
-    explanation = lander
-      ? `Marginal solar power (${illuminationPct}%). Requires active energy conservation for ${lander.name}.`
-      : `Moderate sunlight (${illuminationPct}%). Requires power budgeting between cycles.`;
+    explanation = `Marginal solar power (${illuminationPct}%). Requires active energy conservation to meet minimum threshold (${minRequired}%).`;
   }
 
   return {
@@ -100,8 +90,8 @@ export function evaluateEarthLos(hasLos: boolean, lander?: LanderProfile): RiskF
   let explanation = hasLos
     ? 'Unobstructed direct line-of-sight communication link to NASA Deep Space Network.'
     : (requiresLos 
-        ? `Critical: Direct comms link blocked by topography. Continuous Earth LOS mandatory for ${lander ? lander.name : 'crewed lander'}.`
-        : `Notice: Direct Earth LOS blocked. Autonomous vehicle can buffer telemetry and utilize lunar relay satellites.`);
+        ? 'Critical: Direct comms link blocked by topography. Continuous Earth line-of-sight required.'
+        : 'Notice: Direct Earth LOS blocked. Lunar orbital relay link required.');
 
   return {
     name: 'Earth Line-of-Sight (LOS)',
@@ -131,14 +121,12 @@ export function assessLandingSiteRisk(
   const hasYellow = factors.some(f => f.level === 'YELLOW');
 
   let overall_status: RiskLevel = 'GREEN';
-  let overall_reason = lander
-    ? `GO: Candidate site meets all certified flight tolerances for ${lander.name}.`
-    : 'GO: All evaluated terrain and communication factors fall within safe landing margins.';
+  let overall_reason = 'GO: All evaluated terrain, illumination, and communication factors fall within safe margins.';
 
   if (hasRed) {
     const redFactor = factors.find(f => f.level === 'RED');
     overall_status = 'RED';
-    overall_reason = `NO-GO: ${redFactor?.name} exceeds allowable mission thresholds for ${lander ? lander.name : 'mission profile'}.`;
+    overall_reason = `NO-GO: ${redFactor?.name} exceeds configured mission safety thresholds.`;
   } else if (hasYellow) {
     const yellowFactor = factors.find(f => f.level === 'YELLOW');
     overall_status = 'YELLOW';

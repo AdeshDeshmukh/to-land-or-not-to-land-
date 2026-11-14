@@ -16,21 +16,25 @@ interface CountdownTimersProps {
   site: CandidateSite;
   simulatedDateOffset: number;
   computedIllumination: number;
-  lander: LanderProfile;
+  parameters?: LanderProfile;
+  lander?: LanderProfile;
 }
 
 export const CountdownTimers: React.FC<CountdownTimersProps> = ({
   site,
   simulatedDateOffset,
   computedIllumination,
+  parameters,
   lander,
 }) => {
+  const activeParams = parameters || lander;
+  const minIllum = activeParams?.minIlluminationPct ?? 30;
   const isSouthPole = site.coordinates.latitude < -80;
   const maxSunAngle = isSouthPole ? 3.8 : 75.0;
 
   // Current Sun elevation angle relative to local horizon
   const currentSunAngle = Math.sin((simulatedDateOffset * 2 * Math.PI) / 29.5) * maxSunAngle + (isSouthPole ? 0.8 : 35);
-  const isSunlit = currentSunAngle > 0.3 && computedIllumination >= lander.minIlluminationPct;
+  const isSunlit = currentSunAngle > 0.3 && computedIllumination >= minIllum;
 
   // Calculate forward trajectory to find time to sunset / sunrise
   // Scan ahead up to 29.5 days (one full synodic month) in 0.1 day increments
@@ -44,7 +48,7 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
       const futureOffset = simulatedDateOffset + t;
       const angle = Math.sin((futureOffset * 2 * Math.PI) / 29.5) * maxSunAngle + (isSouthPole ? 0.8 : 35);
       const illum = Math.max(5, Math.min(100, Math.round(site.defaultIlluminationPct + Math.sin(futureOffset * 0.4) * 25)));
-      if (angle <= 0.3 || illum < lander.minIlluminationPct) {
+      if (angle <= 0.3 || illum < minIllum) {
         hoursUntilSunset = Math.round(t * 24);
         break;
       }
@@ -55,7 +59,7 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
       const futureOffset = simulatedDateOffset + t;
       const angle = Math.sin((futureOffset * 2 * Math.PI) / 29.5) * maxSunAngle + (isSouthPole ? 0.8 : 35);
       const illum = Math.max(5, Math.min(100, Math.round(site.defaultIlluminationPct + Math.sin(futureOffset * 0.4) * 25)));
-      if (angle > 0.3 && illum >= lander.minIlluminationPct) {
+      if (angle > 0.3 && illum >= minIllum) {
         hoursUntilSunrise = Math.round(t * 24);
         break;
       }
@@ -66,7 +70,7 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
       const pastOffset = simulatedDateOffset - t;
       const angle = Math.sin((pastOffset * 2 * Math.PI) / 29.5) * maxSunAngle + (isSouthPole ? 0.8 : 35);
       const illum = Math.max(5, Math.min(100, Math.round(site.defaultIlluminationPct + Math.sin(pastOffset * 0.4) * 25)));
-      if (angle > 0.3 && illum >= lander.minIlluminationPct) {
+      if (angle > 0.3 && illum >= minIllum) {
         shadowDurationHours = Math.round(t * 24);
         break;
       }
@@ -94,7 +98,7 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
   }
 
   // Battery State of Charge (SoC) Projection
-  // Lander battery capacity provides ~72 hours of survival power when in shadow
+  // Mission battery capacity provides ~72 hours of survival power when in shadow
   const maxBatteryHours = 72;
   let batterySoCPct = 100;
   if (!isSunlit) {
@@ -290,7 +294,7 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
           <div className="space-y-1">
             <strong className="text-rose-200 block text-xs">CRITICAL WARNING: SHADOW TRAP EXCEEDS 48 HOURS</strong>
             <p className="text-rose-300/90">
-              Site has been in continuous darkness for {shadowDurationHours} hours. Lander battery reserve will be exhausted in ~{Math.round((batterySoCPct / 100) * maxBatteryHours)} hours, risking irreversible cryogenic freeze of propellant tanks and avionics.
+              Site has been in continuous darkness for {shadowDurationHours} hours. Battery reserve will be exhausted in ~{Math.round((batterySoCPct / 100) * maxBatteryHours)} hours, risking irreversible cryogenic freeze of propellant tanks and avionics.
             </p>
           </div>
         </div>
