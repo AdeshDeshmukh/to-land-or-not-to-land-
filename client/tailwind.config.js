@@ -9,16 +9,16 @@ export default {
     extend: {
       colors: {
         space: {
-          950: '#030712',
-          900: '#0B0F19',
-          800: '#111827',
-          700: '#1F2937'
+          950: '#000000',
+          900: '#090A0D',
+          800: '#12141A',
+          700: '#1C1F26'
         },
         lunar: {
           safe: '#10B981',    // Green
           caution: '#F59E0B', // Amber / Yellow
           danger: '#EF4444',  // Red
-          glow: '#38BDF8'     // Cyan glow for UI accents
+          glow: '#FFFFFF'     // Crisp monochrome highlight
         }
       }
     },

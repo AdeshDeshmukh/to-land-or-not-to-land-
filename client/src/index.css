@@ -4,9 +4,42 @@
 
 @layer base {
   body {
-    background-color: #030712;
-    color: #F8FAFC;
+    background-color: #000000;
+    color: #FFFFFF;
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   }
-}
 
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+
+  input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+    background: #1C1F26;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 2px;
+    height: 6px;
+    cursor: pointer;
+  }
+
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 12px;
+    height: 12px;
+    background: #FFFFFF;
+    border: 1px solid #000000;
+    border-radius: 1px;
+    cursor: pointer;
+  }
+
+  input[type="range"]::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: #FFFFFF;
+    border: 1px solid #000000;
+    border-radius: 1px;
+    cursor: pointer;
+  }
+}

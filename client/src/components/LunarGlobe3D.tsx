@@ -1,17 +1,30 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { CandidateSite, LanderProfile } from '../types';
+import { CandidateSite, LanderProfile, RiskLevel } from '../types';
 import { assessLandingSiteRisk } from '../engine/riskEngine';
-import { vector3ToLatLon } from '../utils/lunarTelemetry';
-import { 
-  Compass, 
-  Layers, 
-  RotateCw, 
-  ZoomIn, 
-  Maximize2, 
-  Info,
-  MapPin
+import {
+  vector3ToLatLon,
+  latLonToCartesian,
+  getSubsolarPoint,
+  getEarthPoint,
+  sampleCraterField,
+  sunElevToIlluminationPct,
+  computeSolarTelemetryAtTime,
+  computeSiteIllumination,
+  computeSiteEarthLos,
+  getSouthPoleCraters,
+  formatMissionUtc,
+  parseMissionUtcInputs,
+} from '../utils/lunarTelemetry';
+import {
+  Compass,
+  RotateCw,
+  ZoomIn,
+  Maximize2,
+  MapPin,
+  Crosshair,
+  Clock,
 } from 'lucide-react';
 
 interface LunarGlobe3DProps {
@@ -20,10 +33,58 @@ interface LunarGlobe3DProps {
   onSelectSite: (site: CandidateSite) => void;
   sunIlluminationOffset?: number; // Days offset
   lander?: LanderProfile;
-  onProbeCoordinate?: (lat: number, lon: number) => void;
+  onProbeCoordinate?: (lat: number, lon: number, customName?: string) => void;
+  onChangeDateOffset?: (offsetDays: number) => void;
+  leftDrawerOpen?: boolean;
+  rightDrawerOpen?: boolean;
+}
+
+interface TerrainGrid {
+  width: number;
+  height: number;
+  slopeDeg: Float32Array;
+  roughnessCode: Uint8Array; // 0 = LOW, 1 = MODERATE, 2 = HIGH
+  horizonCutoffDeg: Float32Array;
+  earthCutoffDeg: Float32Array;
+  nx: Float32Array;
+  ny: Float32Array;
+  nz: Float32Array;
+}
+
+interface ProjectedPin {
+  site: CandidateSite;
+  status: RiskLevel;
+  illumPct: number;
+  sx: number;
+  sy: number;
+  labelX: number;
+  labelY: number;
+  align: 'left' | 'right';
 }
 
 const MOON_RADIUS = 3.5;
+const GRID_W = 512;
+const GRID_H = 256;
+const SURF_TEX_W = 2048;
+const SURF_TEX_H = 1024;
+
+const INITIAL_CAM_POS = new THREE.Vector3(5.6, -5.8, -2.2);
+
+const SHORT_NAMES: Record<string, string> = {
+  shackleton_rim: 'SHACKLETON',
+  malapert_mountain: 'MALAPERT PK',
+  nobile_crater_rim: 'NOBILE RGN',
+  mare_tranquillitatis: 'APOLLO 11',
+  connecting_ridge: 'CONN RIDGE',
+};
+
+const LABEL_OFFSETS: Record<string, { dx: number; dy: number; align: 'left' | 'right' }> = {
+  shackleton_rim: { dx: -36, dy: -38, align: 'left' },
+  connecting_ridge: { dx: -36, dy: 28, align: 'left' },
+  malapert_mountain: { dx: 40, dy: -42, align: 'right' },
+  nobile_crater_rim: { dx: 40, dy: 26, align: 'right' },
+  mare_tranquillitatis: { dx: 34, dy: -22, align: 'right' },
+};
 
 // Convert Lunar latitude & longitude to 3D Cartesian coordinates
 function latLonToVector3(lat: number, lon: number, radius: number): THREE.Vector3 {
@@ -35,285 +96,576 @@ function latLonToVector3(lat: number, lon: number, radius: number): THREE.Vector
   return new THREE.Vector3(x, y, z);
 }
 
-// Generate photorealistic procedural Moon surface base (craters, maria, regolith, polar rings)
-function drawLunarBase(ctx: CanvasRenderingContext2D, width: number, height: number, bumpMode = false) {
-  // 1. Base Regolith
-  if (bumpMode) {
-    ctx.fillStyle = '#808080';
-    ctx.fillRect(0, 0, width, height);
-  } else {
-    ctx.fillStyle = '#64748b';
-    ctx.fillRect(0, 0, width, height);
+interface CraterDescriptor {
+  cx: number;
+  cy: number;
+  cz: number;
+  rRad: number;
+  rOuterRad: number;
+  cosOuter: number;
+  depthNorm: number;
+  rimNorm: number;
+  floorRatio: number;
+  steepScale: number;
+}
 
-    // Regolith micro-noise
-    const imgData = ctx.getImageData(0, 0, width, height);
-    const data = imgData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      const noise = (Math.random() - 0.5) * 32;
-      const baseVal = Math.max(0, Math.min(255, 110 + noise));
-      data[i] = baseVal;
-      data[i + 1] = baseVal;
-      data[i + 2] = baseVal + 2;
-      data[i + 3] = 255;
-    }
-    ctx.putImageData(imgData, 0, 0);
-  }
-
-  // 2. Major Lunar Maria (Dark Basaltic Plains)
-  const maria = [
-    { x: 780, y: 340, rx: 240, ry: 190, dark: 0.42 }, // Oceanus Procellarum
-    { x: 1080, y: 390, rx: 110, ry: 90, dark: 0.46 },  // Mare Tranquillitatis
-    { x: 1040, y: 310, rx: 100, ry: 80, dark: 0.44 },  // Mare Serenitatis
-    { x: 1240, y: 370, rx: 70, ry: 60, dark: 0.48 },   // Mare Crisium
-    { x: 920, y: 460, rx: 120, ry: 90, dark: 0.38 },   // Mare Nubium
-    { x: 1024, y: 880, rx: 290, ry: 110, dark: 0.58 }, // South Pole - Aitken Basin
-  ];
-
-  maria.forEach(m => {
-    const grad = ctx.createRadialGradient(m.x, m.y, 10, m.x, m.y, Math.max(m.rx, m.ry));
-    if (bumpMode) {
-      grad.addColorStop(0, 'rgba(60, 60, 60, 0.4)');
-      grad.addColorStop(1, 'rgba(128, 128, 128, 0)');
-    } else {
-      grad.addColorStop(0, `rgba(15, 23, 42, ${m.dark})`);
-      grad.addColorStop(0.7, `rgba(30, 41, 59, ${m.dark * 0.6})`);
-      grad.addColorStop(1, 'rgba(51, 65, 85, 0)');
-    }
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.ellipse(m.x, m.y, m.rx, m.ry, 0, 0, Math.PI * 2);
-    ctx.fill();
+let cachedCraterDescriptors: CraterDescriptor[] | null = null;
+function getCraterDescriptors(): CraterDescriptor[] {
+  if (cachedCraterDescriptors) return cachedCraterDescriptors;
+  cachedCraterDescriptors = getSouthPoleCraters().map((c) => {
+    const center = latLonToCartesian(c.lat, c.lon, 1);
+    const rRad = (c.radiusDeg * Math.PI) / 180;
+    const rOuterRad = rRad * 1.48;
+    const steepScale = 0.56 * Math.min(1.35, 0.72 + 0.32 / Math.sqrt(Math.max(0.22, c.radiusDeg)));
+    return {
+      cx: center.x,
+      cy: center.y,
+      cz: center.z,
+      rRad,
+      rOuterRad,
+      cosOuter: Math.cos(rOuterRad),
+      depthNorm: c.depthNorm,
+      rimNorm: c.rimNorm,
+      floorRatio: c.floorRadiusRatio ?? 0.42,
+      steepScale,
+    };
   });
+  return cachedCraterDescriptors;
+}
 
-  // 3. Dense Procedural Impact Craters across Globe (especially South Pole Highlands)
-  // Deterministic seed for reproducible lunar crater distribution
-  let seed = 42;
-  const pseudoRandom = () => {
-    seed = (seed * 9301 + 49297) % 233280;
-    return seed / 233280;
-  };
+// Isotropic 3D trilinear hash noise (completely non-periodic -> zero parallel stripe artifacts)
+function hash3(ix: number, iy: number, iz: number): number {
+  let n = (ix * 374761393 + iy * 668265263 + iz * 2147483647) | 0;
+  n = (n ^ (n >>> 13)) | 0;
+  n = Math.imul(n, 1274126177);
+  return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
+}
 
-  // Generate ~160 background craters of varying sizes
-  for (let i = 0; i < 160; i++) {
-    const cx = pseudoRandom() * width;
-    // Bias crater density toward the South Pole (y > 600)
-    const bias = pseudoRandom();
-    const cy = bias > 0.45 ? 600 + pseudoRandom() * (height - 600) : pseudoRandom() * 600;
-    const r = 3 + Math.pow(pseudoRandom(), 2) * 22;
+function noise3D(x: number, y: number, z: number): number {
+  const ix = Math.floor(x);
+  const iy = Math.floor(y);
+  const iz = Math.floor(z);
+  const fx = x - ix;
+  const fy = y - iy;
+  const fz = z - iz;
+  const ux = fx * fx * (3 - 2 * fx);
+  const uy = fy * fy * (3 - 2 * fy);
+  const uz = fz * fz * (3 - 2 * fz);
 
-    // Crater floor (depression)
-    ctx.fillStyle = bumpMode ? 'rgba(30, 30, 30, 0.65)' : 'rgba(15, 23, 42, 0.55)';
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.fill();
+  const c000 = hash3(ix, iy, iz);
+  const c100 = hash3(ix + 1, iy, iz);
+  const c010 = hash3(ix, iy + 1, iz);
+  const c110 = hash3(ix + 1, iy + 1, iz);
+  const c001 = hash3(ix, iy, iz + 1);
+  const c101 = hash3(ix + 1, iy, iz + 1);
+  const c011 = hash3(ix, iy + 1, iz + 1);
+  const c111 = hash3(ix + 1, iy + 1, iz + 1);
 
-    // Crater rim (raised crest)
-    ctx.strokeStyle = bumpMode ? 'rgba(255, 255, 255, 0.85)' : 'rgba(241, 245, 249, 0.70)';
-    ctx.lineWidth = Math.max(1, r * 0.18);
-    ctx.beginPath();
-    ctx.arc(cx, cy, r, 0, Math.PI * 2);
-    ctx.stroke();
+  const x00 = c000 + (c100 - c000) * ux;
+  const x10 = c010 + (c110 - c010) * ux;
+  const x01 = c001 + (c101 - c001) * ux;
+  const x11 = c011 + (c111 - c011) * ux;
 
-    // Subtle shadow crescent inside crater
-    ctx.fillStyle = bumpMode ? 'rgba(10, 10, 10, 0.5)' : 'rgba(2, 6, 23, 0.6)';
-    ctx.beginPath();
-    ctx.arc(cx + r * 0.25, cy + r * 0.2, r * 0.65, 0, Math.PI * 2);
-    ctx.fill();
+  const y0 = x00 + (x10 - x00) * uy;
+  const y1 = x01 + (x11 - x01) * uy;
+  return (y0 + (y1 - y0) * uz) * 2 - 1;
+}
+
+function fbm3D(x: number, y: number, z: number): number {
+  return (
+    noise3D(x, y, z) * 0.62 +
+    noise3D(x * 2.13, y * 2.13, z * 2.13) * 0.28 +
+    noise3D(x * 4.41, y * 4.41, z * 4.41) * 0.10
+  );
+}
+
+// 1. Synthesize Monochrome Lunar Albedo & Spherical Tangent-Space Normal Map
+// Preserves full LROC/LOLA mid-latitude fidelity while sculpting crisp circular 3D-lit South Pole craters down to -90°.
+function paintLunarSurfaceTextures(
+  monoCanvas: HTMLCanvasElement,
+  monoTexture: THREE.CanvasTexture,
+  normalCanvas: HTMLCanvasElement,
+  normalTexture: THREE.CanvasTexture,
+  bumpCanvas: HTMLCanvasElement,
+  bumpTexture: THREE.CanvasTexture,
+  lrocImg?: HTMLImageElement,
+  bumpImg?: HTMLImageElement
+) {
+  const w = SURF_TEX_W;
+  const h = SURF_TEX_H;
+  const mctx = monoCanvas.getContext('2d', { willReadFrequently: true })!;
+  const nctx = normalCanvas.getContext('2d', { willReadFrequently: true })!;
+  const bctx = bumpCanvas.getContext('2d', { willReadFrequently: true })!;
+
+  // Base albedo from LROC polar texture (or neutral regolith seed before image load)
+  if (lrocImg) {
+    mctx.drawImage(lrocImg, 0, 0, w, h);
+  } else {
+    mctx.fillStyle = '#8b8e94';
+    mctx.fillRect(0, 0, w, h);
   }
+  const monoImgData = mctx.getImageData(0, 0, w, h);
+  const mData = monoImgData.data;
 
-  // 4. Prominent Landmark Lunar Craters
-  const majorCraters = [
-    { x: 980, y: 650, r: 28, rays: true },   // Tycho
-    { x: 820, y: 430, r: 24, rays: true },   // Copernicus
-    { x: 740, y: 390, r: 20, rays: false },  // Kepler
-    // South Pole Artemis interest craters
-    { x: 1024, y: 994, r: 30, rays: true },  // Shackleton Crater (South Pole)
-    { x: 1060, y: 960, r: 24, rays: false }, // Malapert Mountain area
-    { x: 1180, y: 970, r: 26, rays: false }, // Nobile Crater
-    { x: 920, y: 980, r: 22, rays: false },  // Connecting Ridge area
-    { x: 970, y: 965, r: 20, rays: false },  // de Gerlache Crater
-    { x: 1080, y: 990, r: 21, rays: false }, // Faustini Crater
-    { x: 1120, y: 940, r: 25, rays: false }, // Amundsen Crater
-    { x: 990, y: 940, r: 18, rays: false },  // Shoemaker Crater
-  ];
+  // Extract LOLA bump pixels if decoded
+  let lolaData: Uint8ClampedArray | null = null;
+  if (bumpImg) {
+    bctx.drawImage(bumpImg, 0, 0, w, h);
+    lolaData = bctx.getImageData(0, 0, w, h).data;
+  }
+  const bumpImgData = bctx.createImageData(w, h);
+  const bData = bumpImgData.data;
 
-  majorCraters.forEach(c => {
-    // Crater floor
-    ctx.fillStyle = bumpMode ? 'rgba(20, 20, 20, 0.8)' : 'rgba(15, 23, 42, 0.75)';
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-    ctx.fill();
+  const normalImgData = nctx.createImageData(w, h);
+  const nData = normalImgData.data;
 
-    // Crater bright raised rim
-    ctx.strokeStyle = bumpMode ? 'rgba(255, 255, 255, 0.95)' : 'rgba(248, 250, 252, 0.90)';
-    ctx.lineWidth = Math.max(1.8, c.r * 0.16);
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-    ctx.stroke();
+  const craters = getCraterDescriptors();
+  const numCraters = craters.length;
+  const deg2Rad = Math.PI / 180;
+  const noiseEps = 0.008;
 
-    // Central peak for large impact structures
-    if (c.r > 20) {
-      ctx.fillStyle = bumpMode ? 'rgba(255, 255, 255, 0.8)' : 'rgba(241, 245, 249, 0.75)';
-      ctx.beginPath();
-      ctx.arc(c.x, c.y, c.r * 0.18, 0, Math.PI * 2);
-      ctx.fill();
+  for (let py = 0; py < h; py++) {
+    const latDeg = 90 - ((py + 0.5) / h) * 180;
+    const latRad = latDeg * deg2Rad;
+    const sinLat = Math.sin(latRad);
+    const cosLat = Math.cos(latRad);
+    const cosLatClamped = Math.max(0.32, cosLat);
+    const isPolarCraterZone = latDeg <= -57.5;
+
+    // Taper LOLA finite-difference gradient smoothly to 0 by -64° so polar equirectangular JPEG stripes never appear
+    let lolaPoleFade = 1.0;
+    if (latDeg < -52) {
+      const t = Math.max(0, Math.min(1, (-52 - latDeg) / 12));
+      lolaPoleFade = 1 - t * t * (3 - 2 * t);
+    } else if (latDeg > 60) {
+      const t = Math.max(0, Math.min(1, (latDeg - 60) / 15));
+      lolaPoleFade = 1 - t * t * (3 - 2 * t);
     }
 
-    // Ejecta rays
-    if (c.rays && !bumpMode) {
-      ctx.strokeStyle = 'rgba(248, 250, 252, 0.35)';
-      ctx.lineWidth = 1.4;
-      for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
-        ctx.beginPath();
-        ctx.moveTo(c.x, c.y);
-        ctx.lineTo(
-          c.x + Math.cos(angle) * (c.r * 6 + pseudoRandom() * 50),
-          c.y + Math.sin(angle) * (c.r * 6 + pseudoRandom() * 50)
-        );
-        ctx.stroke();
+    const pyUp = Math.max(0, py - 1);
+    const pyDn = Math.min(h - 1, py + 1);
+    const rowOffset = py * w;
+
+    for (let px = 0; px < w; px++) {
+      const idx = rowOffset + px;
+      const p4 = idx * 4;
+      const lonDeg = ((px + 0.5) / w) * 360 - 180;
+      const lonRad = lonDeg * deg2Rad;
+      const sinLon = Math.sin(lonRad);
+      const cosLon = Math.cos(lonRad);
+
+      // Outward spherical normal P, East tangent E, North tangent N
+      const vx = cosLat * cosLon;
+      const vy = sinLat;
+      const vz = -cosLat * sinLon;
+
+      const ex = -sinLon;
+      const ez = -cosLon; // ey = 0
+      const nxAxis = -sinLat * cosLon;
+      const nyAxis = cosLat;
+      const nzAxis = sinLat * sinLon;
+
+      // 1) Base LROC monochrome albedo
+      let albedoLum: number;
+      if (lrocImg) {
+        const lum = 0.299 * mData[p4] + 0.587 * mData[p4 + 1] + 0.114 * mData[p4 + 2];
+        albedoLum = Math.min(255, Math.max(0, Math.pow(lum / 255, 1.06) * 235 + 10));
+      } else {
+        albedoLum = 138 + fbm3D(vx * 5, vy * 5, vz * 5) * 16;
+      }
+
+      // 2) LOLA terrain slope + height (mid-latitudes smoothed cleanly, tapered near poles)
+      let heightNorm = 0;
+      let dH_dEast = 0;
+      let dH_dNorth = 0;
+
+      if (lolaData && lolaPoleFade > 0.005) {
+        const pxL = (px - 1 + w) % w;
+        const pxR = (px + 1) % w;
+        const eC = lolaData[p4];
+        const eL = lolaData[(rowOffset + pxL) * 4];
+        const eR = lolaData[(rowOffset + pxR) * 4];
+        const eU = lolaData[(pyUp * w + px) * 4];
+        const eD = lolaData[(pyDn * w + px) * 4];
+
+        heightNorm += (eC / 255 - 0.5) * 0.45 * lolaPoleFade;
+        dH_dEast += (((eR - eL) / 255) * 1.9 * lolaPoleFade) / cosLatClamped;
+        dH_dNorth += ((eU - eD) / 255) * 1.9 * lolaPoleFade;
+      }
+
+      // 3) Analytic 3D Spherical South Pole Crater Synthesis + isotropic 3D highland relief
+      let craterH = 0;
+      if (isPolarCraterZone) {
+        for (let ci = 0; ci < numCraters; ci++) {
+          const c = craters[ci];
+          const dot = vx * c.cx + vy * c.cy + vz * c.cz;
+          if (dot <= c.cosOuter) continue;
+
+          const clampedDot = dot > 1 ? 1 : dot;
+          const theta = Math.acos(clampedDot);
+          const sinTheta = Math.sqrt(Math.max(1e-10, 1 - clampedDot * clampedDot));
+          const rNorm = theta / c.rRad;
+
+          let dfDrNorm = 0;
+          if (rNorm < 1.0) {
+            const floorR = c.floorRatio;
+            if (rNorm <= floorR) {
+              craterH += -c.depthNorm + c.rimNorm * Math.pow(rNorm, 3.0);
+              dfDrNorm = 3.0 * c.rimNorm * rNorm * rNorm;
+            } else {
+              const span = Math.max(0.05, 1.0 - floorR);
+              const u = (rNorm - floorR) / span;
+              const smooth = u * u * (3 - 2 * u);
+              const dSmooth = (6 * u * (1 - u)) / span;
+              craterH += -c.depthNorm * (1.0 - smooth) + c.rimNorm * Math.pow(rNorm, 3.0);
+              dfDrNorm = c.depthNorm * dSmooth + 3.0 * c.rimNorm * rNorm * rNorm;
+            }
+          } else {
+            const t = (rNorm - 1.0) / 0.48;
+            if (t < 1.0) {
+              const apron = 1.0 - t;
+              craterH += c.rimNorm * apron * apron;
+              dfDrNorm = -(2.0 * c.rimNorm * apron) / 0.48;
+            }
+          }
+
+          if (Math.abs(dfDrNorm) > 1e-5) {
+            const cDotE = c.cx * ex + c.cz * ez;
+            const cDotN = c.cx * nxAxis + c.cy * nyAxis + c.cz * nzAxis;
+            const factor = (dfDrNorm * c.steepScale) / sinTheta;
+            dH_dEast += factor * -cDotE;
+            dH_dNorth += factor * -cDotN;
+          }
+        }
+
+        // Gentle isotropic 3D highland regolith undulation (non-periodic)
+        const nFreq = 18.0;
+        const px0 = vx * nFreq;
+        const py0 = vy * nFreq;
+        const pz0 = vz * nFreq;
+        const nE =
+          fbm3D(px0 + ex * noiseEps * nFreq, py0, pz0 + ez * noiseEps * nFreq) -
+          fbm3D(px0 - ex * noiseEps * nFreq, py0, pz0 - ez * noiseEps * nFreq);
+        const nN =
+          fbm3D(px0 + nxAxis * noiseEps * nFreq, py0 + nyAxis * noiseEps * nFreq, pz0 + nzAxis * noiseEps * nFreq) -
+          fbm3D(px0 - nxAxis * noiseEps * nFreq, py0 - nyAxis * noiseEps * nFreq, pz0 - nzAxis * noiseEps * nFreq);
+        const regolithH = fbm3D(px0, py0, pz0) * 0.05;
+        craterH += regolithH;
+        dH_dEast += (nE / (2 * noiseEps)) * 0.008;
+        dH_dNorth += (nN / (2 * noiseEps)) * 0.008;
+
+        // Ambient occlusion & sun-catching anorthosite rim shading inside monochrome albedo
+        if (craterH < -0.04) {
+          albedoLum *= Math.max(0.64, 1.0 + craterH * 0.30);
+        } else if (craterH > 0.02) {
+          albedoLum *= Math.min(1.22, 1.0 + craterH * 0.50);
+        }
+        heightNorm += craterH * 0.55;
+      }
+
+      // Write monochrome albedo
+      const finalAlbedo = Math.min(255, Math.max(0, Math.round(albedoLum)));
+      mData[p4] = finalAlbedo;
+      mData[p4 + 1] = finalAlbedo;
+      mData[p4 + 2] = finalAlbedo;
+      mData[p4 + 3] = 255;
+
+      // Write combined bump grayscale (128 neutral)
+      const finalBump = Math.min(255, Math.max(0, Math.round(128 + heightNorm * 110)));
+      bData[p4] = finalBump;
+      bData[p4 + 1] = finalBump;
+      bData[p4 + 2] = finalBump;
+      bData[p4 + 3] = 255;
+
+      // Encode normalized tangent-space normal vector (-dH_dE, -dH_dN, 1)
+      const tx = -dH_dEast;
+      const ty = -dH_dNorth;
+      const tz = 1.0;
+      const invLen = 1.0 / Math.sqrt(tx * tx + ty * ty + tz * tz);
+      nData[p4] = Math.min(255, Math.max(0, Math.round((tx * invLen * 0.5 + 0.5) * 255)));
+      nData[p4 + 1] = Math.min(255, Math.max(0, Math.round((ty * invLen * 0.5 + 0.5) * 255)));
+      nData[p4 + 2] = Math.min(255, Math.max(0, Math.round((tz * invLen * 0.5 + 0.5) * 255)));
+      nData[p4 + 3] = 255;
+    }
+  }
+
+  mctx.putImageData(monoImgData, 0, 0);
+  bctx.putImageData(bumpImgData, 0, 0);
+  nctx.putImageData(normalImgData, 0, 0);
+
+  monoTexture.needsUpdate = true;
+  bumpTexture.needsUpdate = true;
+  normalTexture.needsUpdate = true;
+}
+
+// 2. Build 512x256 terrain grid combining LOLA elevation, South Pole craters, and preset site relief
+function buildTerrainGrid(sites: CandidateSite[], bumpImg?: HTMLImageElement): TerrainGrid {
+  const w = GRID_W;
+  const h = GRID_H;
+  const n = w * h;
+
+  const elev = new Float32Array(n);
+
+  if (bumpImg) {
+    const tmp = document.createElement('canvas');
+    tmp.width = w;
+    tmp.height = h;
+    const tctx = tmp.getContext('2d')!;
+    tctx.drawImage(bumpImg, 0, 0, w, h);
+    const px = tctx.getImageData(0, 0, w, h).data;
+    for (let i = 0; i < n; i++) {
+      elev[i] = px[i * 4];
+    }
+  } else {
+    for (let y = 0; y < h; y++) {
+      const lat = 90 - ((y + 0.5) / h) * 180;
+      for (let x = 0; x < w; x++) {
+        const lon = ((x + 0.5) / w) * 360 - 180;
+        const val =
+          128 +
+          Math.sin(lat * 0.25 + lon * 0.18) * 26 +
+          Math.cos(lon * 0.42 - lat * 0.31) * 18;
+        elev[y * w + x] = Math.max(0, Math.min(255, val));
       }
     }
-  });
-
-  // 5. NASA MoonTrek-style Polar Grid Circles (80°S, 85°S, and meridian lines)
-  if (!bumpMode) {
-    ctx.save();
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)'; // Amber/gold cartographic grid
-    ctx.lineWidth = 1.2;
-    ctx.setLineDash([6, 6]);
-
-    // Concentric latitude rings around South Pole
-    const southPoleY = 1000;
-    const southPoleX = 1024;
-    [40, 85, 140].forEach(radius => {
-      ctx.beginPath();
-      ctx.ellipse(southPoleX, southPoleY, radius * 1.8, radius, 0, 0, Math.PI * 2);
-      ctx.stroke();
-    });
-
-    // Radial meridians converging to pole
-    for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
-      ctx.beginPath();
-      ctx.moveTo(southPoleX, southPoleY);
-      ctx.lineTo(
-        southPoleX + Math.cos(angle) * 260,
-        southPoleY + Math.sin(angle) * 160
-      );
-      ctx.stroke();
-    }
-    ctx.restore();
   }
+
+  const slopeDeg = new Float32Array(n);
+  const roughnessCode = new Uint8Array(n);
+  const horizonCutoffDeg = new Float32Array(n);
+  const earthCutoffDeg = new Float32Array(n);
+  const nx = new Float32Array(n);
+  const ny = new Float32Array(n);
+  const nz = new Float32Array(n);
+
+  for (let y = 0; y < h; y++) {
+    const lat = 90 - ((y + 0.5) / h) * 180;
+    const absLat = Math.abs(lat);
+    const cosLat = Math.max(0.18, Math.cos((lat * Math.PI) / 180));
+    const yUp = Math.max(0, y - 1);
+    const yDn = Math.min(h - 1, y + 1);
+
+    for (let x = 0; x < w; x++) {
+      const xLt = (x - 1 + w) % w;
+      const xRt = (x + 1) % w;
+      const idx = y * w + x;
+      const lon = ((x + 0.5) / w) * 360 - 180;
+
+      const normal = latLonToCartesian(lat, lon, 1);
+      nx[idx] = normal.x;
+      ny[idx] = normal.y;
+      nz[idx] = normal.z;
+
+      const eC = elev[idx];
+      const eL = elev[y * w + xLt];
+      const eR = elev[y * w + xRt];
+      const eU = elev[yUp * w + x];
+      const eD = elev[yDn * w + x];
+
+      const dx = (eR - eL) / (2 * cosLat);
+      const dy = (eD - eU) / 2;
+      const grad = Math.sqrt(dx * dx + dy * dy);
+      const localMean = (eL + eR + eU + eD) * 0.25;
+      const laplacian = Math.abs(eC - localMean);
+
+      const baseSlope = 1.6 + grad * 0.48 + (absLat > 78 ? 1.2 : 0);
+      const craterSample = lat <= -58 ? sampleCraterField(lat, lon) : null;
+
+      slopeDeg[idx] = craterSample
+        ? Math.max(1.2, Math.min(28.0, baseSlope * 0.45 + craterSample.slopeDeg * 0.65))
+        : Math.max(1.0, Math.min(22.0, baseSlope));
+
+      roughnessCode[idx] =
+        slopeDeg[idx] >= 13.5 || laplacian > 7.5 || grad > 22
+          ? 2
+          : slopeDeg[idx] >= 6.5 || laplacian > 3.2 || grad > 11
+            ? 1
+            : 0;
+
+      horizonCutoffDeg[idx] = craterSample ? craterSample.horizonCutoffDeg : 0;
+      earthCutoffDeg[idx] = craterSample ? Math.max(-1.8, craterSample.horizonCutoffDeg * 0.85) : 0;
+    }
+  }
+
+  // Blend Gaussian regional anchors around candidate/custom sites so the globe surface
+  // around each marker mirrors its surveyed terrain slope & topographic horizon prominence
+  for (const site of sites) {
+    const sLat = site.coordinates.latitude;
+    const sLon = site.coordinates.longitude;
+    const cosSiteLat = Math.max(0.08, Math.cos((sLat * Math.PI) / 180));
+    const sigmaDeg = 4.6;
+    const sigma2 = 2 * sigmaDeg * sigmaDeg;
+    const siteRough =
+      site.terrain.roughness === 'HIGH' ? 2 : site.terrain.roughness === 'MODERATE' ? 1 : 0;
+
+    let siteSunCutoff = 0;
+    let siteEarthCutoff = 0;
+    if (site.coordinates.elevation_m >= 2500) {
+      siteSunCutoff = -1.65 - Math.min(0.6, (site.coordinates.elevation_m - 2500) / 4500);
+      siteEarthCutoff = -1.7;
+    } else if (site.coordinates.elevation_m <= -800 && sLat <= -75) {
+      siteSunCutoff = 2.75;
+    }
+    if (site.id === 'nobile_crater_rim' || !site.defaultEarthLos) {
+      siteEarthCutoff = Math.max(siteEarthCutoff, 10.8);
+    }
+
+    const minY = Math.max(0, Math.floor(((90 - (sLat + 12)) / 180) * h));
+    const maxY = Math.min(h - 1, Math.ceil(((90 - (sLat - 12)) / 180) * h));
+
+    for (let y = minY; y <= maxY; y++) {
+      const lat = 90 - ((y + 0.5) / h) * 180;
+      const dLat = lat - sLat;
+      if (Math.abs(dLat) > 12) continue;
+
+      for (let x = 0; x < w; x++) {
+        const lon = ((x + 0.5) / w) * 360 - 180;
+        let dLon = lon - sLon;
+        if (dLon > 180) dLon -= 360;
+        if (dLon < -180) dLon += 360;
+        const scaledDLon = dLon * cosSiteLat;
+        const d2 = dLat * dLat + scaledDLon * scaledDLon;
+        if (d2 > 120) continue;
+
+        const weight = Math.exp(-d2 / sigma2);
+        if (weight < 0.05) continue;
+
+        const idx = y * w + x;
+        slopeDeg[idx] = slopeDeg[idx] * (1 - weight) + site.terrain.slope_deg * weight;
+        horizonCutoffDeg[idx] = horizonCutoffDeg[idx] * (1 - weight) + siteSunCutoff * weight;
+        earthCutoffDeg[idx] = earthCutoffDeg[idx] * (1 - weight) + siteEarthCutoff * weight;
+        if (weight > 0.45) {
+          roughnessCode[idx] = siteRough;
+        }
+      }
+    }
+  }
+
+  return {
+    width: w,
+    height: h,
+    slopeDeg,
+    roughnessCode,
+    horizonCutoffDeg,
+    earthCutoffDeg,
+    nx,
+    ny,
+    nz,
+  };
 }
 
-// Generate photorealistic procedural Moon surface texture
-function createLunarTexture(): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 2048;
-  canvas.height = 1024;
-  const ctx = canvas.getContext('2d')!;
+// 3. Paint dynamic RYG landing assessment directly synced with exact 3D sun shadows + craters
+function paintDynamicOverlayTexture(
+  grid: TerrainGrid,
+  canvas: HTMLCanvasElement,
+  texture: THREE.CanvasTexture,
+  lander: LanderProfile | undefined,
+  sunOffsetDays: number
+) {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
 
-  drawLunarBase(ctx, canvas.width, canvas.height, false);
+  const {
+    width,
+    height,
+    slopeDeg,
+    roughnessCode,
+    horizonCutoffDeg,
+    earthCutoffDeg,
+    nx,
+    ny,
+    nz,
+  } = grid;
+  const imgData = ctx.createImageData(width, height);
+  const data = imgData.data;
 
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.ClampToEdgeWrapping;
-  return texture;
-}
+  const maxSlope = lander ? lander.maxSlopeDeg : 15.0;
+  const cautionSlope = lander ? lander.maxSlopeDeg * 0.75 : 5.0;
+  const minIllum = lander ? lander.minIlluminationPct : 70;
+  const criticalIllum = lander ? lander.minIlluminationPct * 0.5 : 30;
+  const requiresLos = lander ? lander.requiresEarthLos : true;
+  const maxRoughCode =
+    !lander ? 0 : lander.maxRoughness === 'HIGH' ? 2 : lander.maxRoughness === 'MODERATE' ? 1 : 0;
 
-// Generate Bump Map for Three.js 3D depth and specular shadows
-function createLunarBumpMap(): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 1024;
-  canvas.height = 512;
-  const ctx = canvas.getContext('2d')!;
+  const { sunVec } = getSubsolarPoint(sunOffsetDays);
+  const { sunVec: earthVec } = getEarthPoint(sunOffsetDays);
+  const rad2Deg = 180 / Math.PI;
 
-  drawLunarBase(ctx, canvas.width, canvas.height, true);
+  const total = width * height;
+  for (let i = 0; i < total; i++) {
+    const vx = nx[i];
+    const vy = ny[i];
+    const vz = nz[i];
 
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.ClampToEdgeWrapping;
-  return texture;
-}
+    const dotSun = Math.max(-1, Math.min(1, vx * sunVec.x + vy * sunVec.y + vz * sunVec.z));
+    const effectiveSunElev = Math.asin(dotSun) * rad2Deg - horizonCutoffDeg[i];
+    const ill = sunElevToIlluminationPct(effectiveSunElev);
 
-// Generate NASA LOLA Slope Heatmap Overlay Texture (Green <5°, Yellow 5-15°, Red >15°)
-// Matches NASA MoonTrek: translucent overlay draped on top of visible craters!
-function createLolaSlopeTexture(): THREE.CanvasTexture {
-  const canvas = document.createElement('canvas');
-  canvas.width = 2048;
-  canvas.height = 1024;
-  const ctx = canvas.getContext('2d')!;
+    const dotEarth = Math.max(-1, Math.min(1, vx * earthVec.x + vy * earthVec.y + vz * earthVec.z));
+    const effectiveEarthElev = Math.asin(dotEarth) * rad2Deg - earthCutoffDeg[i];
+    const hasLos = effectiveEarthElev > 0;
 
-  // 1. Draw base lunar surface with craters and topography first
-  drawLunarBase(ctx, canvas.width, canvas.height, false);
+    const s = slopeDeg[i];
+    const r = roughnessCode[i];
 
-  // 2. Apply Semi-Transparent LOLA Slope Overlay (alpha 0.52 so craters shine through)
-  ctx.save();
-  ctx.globalAlpha = 0.55;
+    let isRed = false;
+    let isYellow = false;
 
-  // Broad moderate slope highland baseline (amber/yellow-green)
-  const highlandOverlay = ctx.createLinearGradient(0, 700, 0, canvas.height);
-  highlandOverlay.addColorStop(0, 'rgba(234, 179, 8, 0.45)');   // Golden yellow (5-15°)
-  highlandOverlay.addColorStop(0.7, 'rgba(245, 158, 11, 0.55)'); // Amber slope
-  highlandOverlay.addColorStop(1, 'rgba(220, 38, 38, 0.45)');    // Polar rim slopes
-  ctx.fillStyle = highlandOverlay;
-  ctx.fillRect(0, 700, canvas.width, canvas.height - 700);
+    // 1. Slope check
+    if (s > maxSlope) isRed = true;
+    else if (s >= cautionSlope) isYellow = true;
 
-  // Large Smooth Basaltic Plains & Flat Basins (Emerald Green <5° Safe Zone)
-  const safeFlatZones = [
-    { x: 1080, y: 390, rx: 140, ry: 100 }, // Mare Tranquillitatis (Apollo 11)
-    { x: 780, y: 340, rx: 250, ry: 190 },  // Oceanus Procellarum
-    { x: 1040, y: 310, rx: 110, ry: 80 },  // Mare Serenitatis
-    { x: 1240, y: 370, rx: 80, ry: 65 },   // Mare Crisium
-    // Flat South Pole crater floors and plateaus (<5° safe zones like in MoonTrek photo)
-    { x: 800, y: 920, rx: 160, ry: 90 },   // Western polar plain (deep green patch)
-    { x: 1240, y: 930, rx: 150, ry: 85 },  // Eastern polar plain (green patch)
-    { x: 1024, y: 980, rx: 45, ry: 25 },   // Shackleton ridge flat corridor
-  ];
+    // 2. Solar Illumination / 3D Shadow Terminator check
+    if (!isRed) {
+      if (ill < criticalIllum) isRed = true;
+      else if (ill < minIllum) isYellow = true;
+    }
 
-  safeFlatZones.forEach(z => {
-    const grad = ctx.createRadialGradient(z.x, z.y, 10, z.x, z.y, Math.max(z.rx, z.ry));
-    grad.addColorStop(0, '#10b981');   // Vivid Emerald Green
-    grad.addColorStop(0.7, '#059669'); // Deep Green
-    grad.addColorStop(1, 'rgba(5, 150, 105, 0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.ellipse(z.x, z.y, z.rx, z.ry, 0, 0, Math.PI * 2);
-    ctx.fill();
-  });
+    // 3. Roughness check
+    if (!isRed) {
+      if (lander) {
+        if (r === 2) {
+          if (maxRoughCode === 2) isYellow = true;
+          else isRed = true;
+        } else if (r === 1 && maxRoughCode === 0) {
+          isYellow = true;
+        }
+      } else {
+        if (r === 2) isRed = true;
+        else if (r === 1) isYellow = true;
+      }
+    }
 
-  // Steep Crater Walls & Escarpments (Red/Orange >15° Hazard Zones like in MoonTrek photo)
-  const steepHazardZones = [
-    // South Pole crater rim drop-offs (vivid red & orange rims)
-    { x: 1024, y: 994, rx: 32, ry: 20 }, // Shackleton inner wall
-    { x: 1180, y: 970, rx: 36, ry: 24 }, // Nobile crater inner walls
-    { x: 1060, y: 960, rx: 30, ry: 18 }, // Malapert massif steep drops
-    { x: 920, y: 980, rx: 28, ry: 16 },  // Connecting ridge steep flanks
-    { x: 970, y: 965, rx: 24, ry: 16 },  // de Gerlache crater rim
-    { x: 1080, y: 990, rx: 25, ry: 16 }, // Faustini crater wall
-    { x: 1120, y: 940, rx: 30, ry: 18 }, // Amundsen crater wall
-    { x: 990, y: 940, rx: 22, ry: 14 },  // Shoemaker crater rim
-    // Highlands escarpments
-    { x: 1400, y: 500, rx: 220, ry: 140 },
-    { x: 400, y: 400, rx: 180, ry: 130 },
-  ];
+    // 4. Direct-to-Earth (DTE) LOS check
+    if (!isRed && !hasLos) {
+      if (requiresLos) isRed = true;
+      else isYellow = true;
+    }
 
-  steepHazardZones.forEach(z => {
-    const grad = ctx.createRadialGradient(z.x, z.y, 4, z.x, z.y, Math.max(z.rx, z.ry));
-    grad.addColorStop(0, '#ef4444');   // Bright Red Hazard
-    grad.addColorStop(0.6, '#f97316'); // Orange Warning
-    grad.addColorStop(1, 'rgba(249, 115, 22, 0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.ellipse(z.x, z.y, z.rx, z.ry, 0, 0, Math.PI * 2);
-    ctx.fill();
-  });
+    const p = i * 4;
+    if (isRed) {
+      // Surgical Crimson #EF4444
+      data[p] = 239;
+      data[p + 1] = 68;
+      data[p + 2] = 68;
+      data[p + 3] = 210;
+    } else if (isYellow) {
+      // Surgical Amber #F59E0B
+      data[p] = 245;
+      data[p + 1] = 158;
+      data[p + 2] = 11;
+      data[p + 3] = 210;
+    } else {
+      // Surgical Emerald #10B981
+      data[p] = 16;
+      data[p + 1] = 185;
+      data[p + 2] = 129;
+      data[p + 3] = 205;
+    }
+  }
 
-  ctx.restore();
-
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.ClampToEdgeWrapping;
-  return texture;
+  ctx.putImageData(imgData, 0, 0);
+  texture.needsUpdate = true;
 }
 
 export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
@@ -323,13 +675,42 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   sunIlluminationOffset = 0,
   lander,
   onProbeCoordinate,
+  onChangeDateOffset,
+  leftDrawerOpen = false,
+  rightDrawerOpen = false,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
-  const [showSlopeHeatmap, setShowSlopeHeatmap] = useState<boolean>(true);
+  const [showAssessmentOverlay, setShowAssessmentOverlay] = useState<boolean>(true);
+  const [overlayOpacity, setOverlayOpacity] = useState<number>(55);
   const [autoRotate, setAutoRotate] = useState<boolean>(false);
   const [isZoomedIn, setIsZoomedIn] = useState<boolean>(false);
   const [isProbeMode, setIsProbeMode] = useState<boolean>(false);
+  const [isCoordInputOpen, setIsCoordInputOpen] = useState<boolean>(false);
+  const [latInput, setLatInput] = useState<string>('-89.54');
+  const [lonInput, setLonInput] = useState<string>('0.00');
+  const [labelInput, setLabelInput] = useState<string>('');
+  const [coordError, setCoordError] = useState<string>('');
+  const [utcDateInput, setUtcDateInput] = useState<string>(() => formatMissionUtc(sunIlluminationOffset).dateStr);
+  const [utcTimeInput, setUtcTimeInput] = useState<string>(() => formatMissionUtc(sunIlluminationOffset).timeStr);
   const [hoveredSite, setHoveredSite] = useState<CandidateSite | null>(null);
+  const [projectedPins, setProjectedPins] = useState<ProjectedPin[]>([]);
+
+  useEffect(() => {
+    const formatted = formatMissionUtc(sunIlluminationOffset);
+    setUtcDateInput(formatted.dateStr);
+    setUtcTimeInput(formatted.timeStr);
+  }, [sunIlluminationOffset]);
+
+  const selectedSolarTelemetry = useMemo(
+    () =>
+      computeSolarTelemetryAtTime(
+        selectedSite.coordinates.latitude,
+        selectedSite.coordinates.longitude,
+        sunIlluminationOffset,
+        selectedSite
+      ),
+    [selectedSite, sunIlluminationOffset]
+  );
 
   const isProbeModeRef = useRef<boolean>(false);
   isProbeModeRef.current = isProbeMode;
@@ -337,51 +718,127 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   const onProbeCoordinateRef = useRef(onProbeCoordinate);
   onProbeCoordinateRef.current = onProbeCoordinate;
 
-  // References to keep Three.js scene instances across re-renders
+  const onSelectSiteRef = useRef(onSelectSite);
+  onSelectSiteRef.current = onSelectSite;
+
+  const autoRotateRef = useRef(autoRotate);
+  autoRotateRef.current = autoRotate;
+
+  // Dynamic telemetry snapshot per site for crisp 2D projected pins
+  const siteMetricsMap = useMemo(() => {
+    const map = new Map<string, { status: RiskLevel; illumPct: number; hasLos: boolean }>();
+    sites.forEach((site) => {
+      const illumPct = computeSiteIllumination(site, sunIlluminationOffset);
+      const hasLos = computeSiteEarthLos(site, sunIlluminationOffset);
+      const risk = assessLandingSiteRisk(site, illumPct, hasLos, lander);
+      map.set(site.id, { status: risk.overall_status, illumPct, hasLos });
+    });
+    return map;
+  }, [sites, sunIlluminationOffset, lander]);
+
+  const sitesSignature = useMemo(
+    () => sites.map((s) => `${s.id}:${s.coordinates.latitude.toFixed(2)},${s.coordinates.longitude.toFixed(2)}`).join('|'),
+    [sites]
+  );
+  const builtSitesSigRef = useRef<string>('');
+
+  const handleDeployCoordTarget = (e: React.FormEvent) => {
+    e.preventDefault();
+    const parsedLat = Number(latInput);
+    const parsedLon = Number(lonInput);
+    if (!Number.isFinite(parsedLat) || parsedLat < -90 || parsedLat > 90) {
+      setCoordError('LATITUDE MUST BE -90 TO +90');
+      return;
+    }
+    if (!Number.isFinite(parsedLon) || parsedLon < -180 || parsedLon > 180) {
+      setCoordError('LONGITUDE MUST BE -180 TO +180');
+      return;
+    }
+    setCoordError('');
+    if (onProbeCoordinateRef.current) {
+      onProbeCoordinateRef.current(Number(parsedLat.toFixed(2)), Number(parsedLon.toFixed(2)), labelInput.trim() || undefined);
+    }
+    setIsCoordInputOpen(false);
+    setLabelInput('');
+  };
+
+  const applyUtcChange = (nextDate: string, nextTime: string) => {
+    setUtcDateInput(nextDate);
+    setUtcTimeInput(nextTime);
+    const parsedOffset = parseMissionUtcInputs(nextDate, nextTime);
+    if (parsedOffset !== null && onChangeDateOffset) {
+      onChangeDateOffset(parsedOffset);
+    }
+  };
+
+  const siteMetricsRef = useRef(siteMetricsMap);
+  siteMetricsRef.current = siteMetricsMap;
+
+  const sitesRef = useRef(sites);
+  sitesRef.current = sites;
+
+  const landerRef = useRef(lander);
+  landerRef.current = lander;
+
+  const sunOffsetRef = useRef(sunIlluminationOffset);
+  sunOffsetRef.current = sunIlluminationOffset;
+
+  const leftDrawerOpenRef = useRef(leftDrawerOpen);
+  leftDrawerOpenRef.current = leftDrawerOpen;
+
+  const rightDrawerOpenRef = useRef(rightDrawerOpen);
+  rightDrawerOpenRef.current = rightDrawerOpen;
+
+  // Scene & WebGL refs
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const moonMeshRef = useRef<THREE.Mesh | null>(null);
+  const overlayMeshRef = useRef<THREE.Mesh | null>(null);
   const dirLightRef = useRef<THREE.DirectionalLight | null>(null);
   const pinsGroupRef = useRef<THREE.Group | null>(null);
   const landingZonesGroupRef = useRef<THREE.Group | null>(null);
 
-  // Animation target states for smooth camera fly-to
+  // Terrain & Dynamic Overlay Canvas refs
+  const terrainGridRef = useRef<TerrainGrid | null>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayTextureRef = useRef<THREE.CanvasTexture | null>(null);
+  const bumpImgRef = useRef<HTMLImageElement | undefined>(undefined);
+
+  // Camera fly-to refs
   const animTargetCamPos = useRef<THREE.Vector3 | null>(null);
   const animTargetControlsTarget = useRef<THREE.Vector3 | null>(null);
-
-  // Textures
-  const naturalTextureRef = useRef<THREE.CanvasTexture | null>(null);
-  const slopeTextureRef = useRef<THREE.CanvasTexture | null>(null);
-  const bumpTextureRef = useRef<THREE.CanvasTexture | null>(null);
+  const hasMountedFlyRef = useRef<boolean>(false);
 
   // Fly camera to a specific landing site
   const flyToSite = useCallback((site: CandidateSite) => {
     if (!controlsRef.current || !cameraRef.current) return;
-    const siteSurfacePos = latLonToVector3(site.coordinates.latitude, site.coordinates.longitude, MOON_RADIUS);
+    const siteSurfacePos = latLonToVector3(
+      site.coordinates.latitude,
+      site.coordinates.longitude,
+      MOON_RADIUS
+    );
     const outwardNormal = siteSurfacePos.clone().normalize();
-    // Position camera 1.8 units away from site surface (close descent inspection view)
-    const targetCamPos = siteSurfacePos.clone().add(outwardNormal.multiplyScalar(2.0));
-    
+    const targetCamPos = siteSurfacePos.clone().add(outwardNormal.multiplyScalar(2.4));
+
     animTargetCamPos.current = targetCamPos;
     animTargetControlsTarget.current = siteSurfacePos.clone();
     setIsZoomedIn(true);
   }, []);
 
-  // Fly back out to orbital global overview
+  // Fly back out to orbital overview showing Near Side + South Pole
   const resetToGlobalView = useCallback(() => {
     if (!controlsRef.current || !cameraRef.current) return;
-    // Overview angled towards South Pole where Artemis sites cluster
-    animTargetCamPos.current = new THREE.Vector3(0, -6.5, 7.5);
+    animTargetCamPos.current = INITIAL_CAM_POS.clone();
     animTargetControlsTarget.current = new THREE.Vector3(0, 0, 0);
     setIsZoomedIn(false);
   }, []);
 
-  // Zoom specifically to Artemis South Pole
+  // Zoom directly over the Artemis South Pole cluster
   const zoomToSouthPole = useCallback(() => {
     if (!controlsRef.current || !cameraRef.current) return;
-    animTargetCamPos.current = new THREE.Vector3(0, -5.8, 1.8);
+    animTargetCamPos.current = new THREE.Vector3(0.4, -5.8, -1.6);
     animTargetControlsTarget.current = new THREE.Vector3(0, -MOON_RADIUS, 0);
     setIsZoomedIn(true);
   }, []);
@@ -391,105 +848,197 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     const container = mountRef.current;
     if (!container) return;
 
-    const width = container.clientWidth;
-    const height = container.clientHeight || 520;
+    const width = container.clientWidth || window.innerWidth;
+    const height = container.clientHeight || window.innerHeight;
 
-    // 1. Scene
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    // 2. Camera
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.set(0, -5.5, 8.0); // Initial view angled toward south pole
+    camera.position.copy(INITIAL_CAM_POS);
     cameraRef.current = camera;
 
-    // 3. Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.25;
+    renderer.toneMappingExposure = 1.2;
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // 4. OrbitControls
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    controls.minDistance = 4.2;  // Close descent zoom
-    controls.maxDistance = 16.0; // Distant orbital view
+    controls.minDistance = 4.2;
+    controls.maxDistance = 16.0;
     controls.rotateSpeed = 0.65;
     controls.zoomSpeed = 0.85;
     controls.target.set(0, 0, 0);
     controlsRef.current = controls;
 
-    // 5. Lighting
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.12);
+    // Monochrome lighting (crisp high-contrast solar light aligned to synodic ephemeris + minimal shadow fill)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.06);
     scene.add(ambientLight);
 
-    const dirLight = new THREE.DirectionalLight(0xfffaed, 2.5);
-    dirLight.position.set(10, 2, 5);
+    const { sunVec: initSunVec } = getSubsolarPoint(sunOffsetRef.current);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 3.1);
+    dirLight.position.set(initSunVec.x * 16, initSunVec.y * 16, initSunVec.z * 16);
     scene.add(dirLight);
     dirLightRef.current = dirLight;
 
-    // Earthshine subtle fill light on dark side
-    const earthshineLight = new THREE.DirectionalLight(0x38bdf8, 0.35);
+    const earthshineLight = new THREE.DirectionalLight(0xd1d5db, 0.07);
     earthshineLight.position.set(-10, -2, -5);
     scene.add(earthshineLight);
 
-    // 6. Textures & Moon Sphere
-    naturalTextureRef.current = createLunarTexture();
-    slopeTextureRef.current = createLolaSlopeTexture();
-    bumpTextureRef.current = createLunarBumpMap();
+    // 1. Monochrome Lunar Base Sphere (LROC grayscale albedo + LOLA DEM + 3D Spherical South Pole Craters Normal Map)
+    const monoCanvas = document.createElement('canvas');
+    monoCanvas.width = SURF_TEX_W;
+    monoCanvas.height = SURF_TEX_H;
+    const monoTexture = new THREE.CanvasTexture(monoCanvas);
+    monoTexture.wrapS = THREE.RepeatWrapping;
+    monoTexture.wrapT = THREE.ClampToEdgeWrapping;
 
-    const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 64, 64);
+    const normalCanvas = document.createElement('canvas');
+    normalCanvas.width = SURF_TEX_W;
+    normalCanvas.height = SURF_TEX_H;
+    const normalTexture = new THREE.CanvasTexture(normalCanvas);
+    normalTexture.wrapS = THREE.RepeatWrapping;
+    normalTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+    const bumpCanvas = document.createElement('canvas');
+    bumpCanvas.width = SURF_TEX_W;
+    bumpCanvas.height = SURF_TEX_H;
+    const bumpTexture = new THREE.CanvasTexture(bumpCanvas);
+    bumpTexture.wrapS = THREE.RepeatWrapping;
+    bumpTexture.wrapT = THREE.ClampToEdgeWrapping;
+
+    let loadedLrocImg: HTMLImageElement | undefined;
+    let loadedBumpImg: HTMLImageElement | undefined;
+    let isCleanedUp = false;
+
+    // Seed crisp South Pole crater relief immediately on mount before external JPEGs decode
+    paintLunarSurfaceTextures(
+      monoCanvas,
+      monoTexture,
+      normalCanvas,
+      normalTexture,
+      bumpCanvas,
+      bumpTexture
+    );
+
+    const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 128, 128);
     const moonMaterial = new THREE.MeshStandardMaterial({
-      map: slopeTextureRef.current,
-      bumpMap: bumpTextureRef.current,
-      bumpScale: 0.05,
-      roughness: 0.82,
-      metalness: 0.08,
+      map: monoTexture,
+      normalMap: normalTexture,
+      normalScale: new THREE.Vector2(1.85, 1.85),
+      roughness: 0.92,
+      metalness: 0.0,
     });
     const moonMesh = new THREE.Mesh(moonGeometry, moonMaterial);
     scene.add(moonMesh);
     moonMeshRef.current = moonMesh;
 
-    // Subtle atmospheric / limb glow halo
-    const glowGeometry = new THREE.SphereGeometry(MOON_RADIUS * 1.018, 48, 48);
-    const glowMaterial = new THREE.ShaderMaterial({
-      vertexShader: `
-        varying vec3 vNormal;
-        void main() {
-          vNormal = normalize(normalMatrix * normal);
-          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-      `,
-      fragmentShader: `
-        varying vec3 vNormal;
-        void main() {
-          float intensity = pow(0.68 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 2.2);
-          gl_FragColor = vec4(0.2, 0.7, 1.0, 1.0) * intensity * 0.45;
-        }
-      `,
-      blending: THREE.AdditiveBlending,
-      side: THREE.BackSide,
-      transparent: true,
-    });
-    const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
-    scene.add(glowMesh);
+    // 2. Separate Dynamic RYG Assessment Overlay Sphere
+    const overlayCanvas = document.createElement('canvas');
+    overlayCanvas.width = GRID_W;
+    overlayCanvas.height = GRID_H;
+    overlayCanvasRef.current = overlayCanvas;
 
-    // 7. Interactive Site Pins Group
+    const overlayTexture = new THREE.CanvasTexture(overlayCanvas);
+    overlayTexture.wrapS = THREE.RepeatWrapping;
+    overlayTexture.wrapT = THREE.ClampToEdgeWrapping;
+    overlayTexture.minFilter = THREE.LinearFilter;
+    overlayTexture.magFilter = THREE.LinearFilter;
+    overlayTextureRef.current = overlayTexture;
+
+    const overlayGeo = new THREE.SphereGeometry(MOON_RADIUS * 1.002, 128, 128);
+    const overlayMat = new THREE.MeshLambertMaterial({
+      map: overlayTexture,
+      transparent: true,
+      opacity: (overlayOpacity / 100) * 0.75,
+      depthWrite: false,
+    });
+    const overlayMesh = new THREE.Mesh(overlayGeo, overlayMat);
+    overlayMesh.visible = showAssessmentOverlay && overlayOpacity > 0;
+    scene.add(overlayMesh);
+    overlayMeshRef.current = overlayMesh;
+
+    // Seed terrain grid immediately, then refine once /textures/lroc_color_poles_4k.jpg & /textures/lola_bump_2k.jpg load
+    builtSitesSigRef.current = sitesSignature;
+    terrainGridRef.current = buildTerrainGrid(sitesRef.current);
+    paintDynamicOverlayTexture(
+      terrainGridRef.current,
+      overlayCanvas,
+      overlayTexture,
+      lander,
+      sunIlluminationOffset
+    );
+
+    const lrocImg = new Image();
+    lrocImg.crossOrigin = 'anonymous';
+    let triedLrocFallback = false;
+    lrocImg.onload = () => {
+      if (isCleanedUp) return;
+      loadedLrocImg = lrocImg;
+      paintLunarSurfaceTextures(
+        monoCanvas,
+        monoTexture,
+        normalCanvas,
+        normalTexture,
+        bumpCanvas,
+        bumpTexture,
+        loadedLrocImg,
+        loadedBumpImg
+      );
+    };
+    lrocImg.onerror = () => {
+      if (!triedLrocFallback) {
+        triedLrocFallback = true;
+        lrocImg.src = '/textures/lroc_color_2k.jpg';
+      }
+    };
+    lrocImg.src = '/textures/lroc_color_poles_4k.jpg';
+
+    const bumpImg = new Image();
+    bumpImg.crossOrigin = 'anonymous';
+    bumpImg.onload = () => {
+      if (isCleanedUp) return;
+      loadedBumpImg = bumpImg;
+      bumpImgRef.current = bumpImg;
+      paintLunarSurfaceTextures(
+        monoCanvas,
+        monoTexture,
+        normalCanvas,
+        normalTexture,
+        bumpCanvas,
+        bumpTexture,
+        loadedLrocImg,
+        loadedBumpImg
+      );
+      terrainGridRef.current = buildTerrainGrid(sitesRef.current, bumpImg);
+      if (overlayCanvasRef.current && overlayTextureRef.current) {
+        paintDynamicOverlayTexture(
+          terrainGridRef.current,
+          overlayCanvasRef.current,
+          overlayTextureRef.current,
+          landerRef.current,
+          sunOffsetRef.current
+        );
+      }
+    };
+    bumpImg.src = '/textures/lola_bump_2k.jpg';
+
+    // 3. Pickable 3D Hit Spheres & Static Selected Target Ring
     const pinsGroup = new THREE.Group();
     scene.add(pinsGroup);
     pinsGroupRef.current = pinsGroup;
 
-    // 8. High-Res Landing Zones Group (Footprint boundaries)
     const landingZonesGroup = new THREE.Group();
     scene.add(landingZonesGroup);
     landingZonesGroupRef.current = landingZonesGroup;
 
-    // 9. Raycaster for clicking 3D pins
+    // 4. Raycaster for clicking pins or probing surface coordinates
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
@@ -500,7 +1049,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 
       raycaster.setFromCamera(mouse, camera);
 
-      // 1. Probe Mode: Click anywhere on Moon surface to probe coordinates
       if (isProbeModeRef.current && moonMeshRef.current) {
         const moonIntersects = raycaster.intersectObject(moonMeshRef.current);
         if (moonIntersects.length > 0) {
@@ -514,16 +1062,14 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         }
       }
 
-      // 2. Normal Mode: Click to select existing pins
       const intersects = raycaster.intersectObjects(pinsGroup.children, true);
-
       if (intersects.length > 0) {
         let obj: THREE.Object3D | null = intersects[0].object;
         while (obj && !obj.userData?.site) {
           obj = obj.parent;
         }
         if (obj && obj.userData?.site) {
-          onSelectSite(obj.userData.site);
+          onSelectSiteRef.current(obj.userData.site);
         }
       }
     };
@@ -540,7 +1086,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 
       raycaster.setFromCamera(mouse, camera);
       const intersects = raycaster.intersectObjects(pinsGroup.children, true);
-
       if (intersects.length > 0) {
         let obj: THREE.Object3D | null = intersects[0].object;
         while (obj && !obj.userData?.site) {
@@ -559,26 +1104,130 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
 
-    // 10. Resize handler
+    // 5. ResizeObserver
     const handleResize = () => {
       if (!container || !renderer || !camera) return;
-      const newW = container.clientWidth;
-      const newH = container.clientHeight || 520;
+      const newW = container.clientWidth || window.innerWidth;
+      const newH = container.clientHeight || window.innerHeight;
       camera.aspect = newW / newH;
       camera.updateProjectionMatrix();
       renderer.setSize(newW, newH);
     };
     window.addEventListener('resize', handleResize);
 
-    // 11. Animation Loop
-    let animId: number;
-    let clock = new THREE.Clock();
+    const resizeObserver = new ResizeObserver(() => {
+      handleResize();
+    });
+    resizeObserver.observe(container);
 
+    // 6. Screen-space projection for clean SpaceX telemetry markers & non-overlapping leader lines
+    let lastProjectionSig = '';
+    const camToSite = new THREE.Vector3();
+    const worldPos = new THREE.Vector3();
+    const surfaceNormal = new THREE.Vector3();
+    const ndc = new THREE.Vector3();
+
+    const computeProjectedPins = () => {
+      const w = container.clientWidth || window.innerWidth;
+      const h = container.clientHeight || window.innerHeight;
+      const currentSites = sitesRef.current;
+      const metricsMap = siteMetricsRef.current;
+
+      const leftOpen = leftDrawerOpenRef.current && w >= 1024;
+      const rightOpen = rightDrawerOpenRef.current && w >= 1024;
+      const safeLeft = leftOpen ? 396 : 16;
+      const safeRight = rightOpen ? w - 512 : w - 16;
+      const safeTop = leftOpen && rightOpen ? 104 : 66;
+      const safeBottom = leftOpen && rightOpen ? h - 104 : h - 74;
+
+      const raw: ProjectedPin[] = [];
+      for (const site of currentSites) {
+        const localPos = latLonToVector3(
+          site.coordinates.latitude,
+          site.coordinates.longitude,
+          MOON_RADIUS * 1.005
+        );
+        worldPos.copy(localPos).applyEuler(moonMesh.rotation);
+        surfaceNormal.copy(worldPos).normalize();
+        camToSite.copy(camera.position).sub(worldPos).normalize();
+
+        // Hide markers behind the Moon horizon
+        if (surfaceNormal.dot(camToSite) <= 0.02) continue;
+
+        ndc.copy(worldPos).project(camera);
+        if (ndc.z > 1) continue;
+
+        const sx = (ndc.x * 0.5 + 0.5) * w;
+        const sy = (-ndc.y * 0.5 + 0.5) * h;
+
+        // Skip pins behind open side drawers or behind top/bottom HUD control strips
+        if (sx < safeLeft || sx > safeRight || sy < safeTop || sy > safeBottom) {
+          continue;
+        }
+
+        const offset = LABEL_OFFSETS[site.id] || {
+          dx: ndc.x < 0 ? -36 : 36,
+          dy: ndc.y > 0 ? 22 : -28,
+          align: ndc.x < 0 ? ('left' as const) : ('right' as const),
+        };
+
+        const labelX =
+          offset.align === 'left'
+            ? Math.max(safeLeft + 148, Math.min(safeRight - 8, sx + offset.dx))
+            : Math.max(safeLeft + 8, Math.min(safeRight - 148, sx + offset.dx));
+        const labelY = Math.max(safeTop + 8, Math.min(safeBottom - 8, sy + offset.dy));
+        const metric = metricsMap.get(site.id) || {
+          status: 'GREEN' as RiskLevel,
+          illumPct: site.defaultIlluminationPct,
+        };
+
+        raw.push({
+          site,
+          status: metric.status,
+          illumPct: metric.illumPct,
+          sx,
+          sy,
+          labelX,
+          labelY,
+          align: offset.align,
+        });
+      }
+
+      // Vertical de-overlapping pass for left and right clusters so labels never collide
+      const resolveOverlap = (items: ProjectedPin[]) => {
+        items.sort((a, b) => a.labelY - b.labelY);
+        const minGap = 28;
+        for (let i = 1; i < items.length; i++) {
+          if (
+            Math.abs(items[i].labelX - items[i - 1].labelX) < 185 &&
+            items[i].labelY - items[i - 1].labelY < minGap
+          ) {
+            items[i].labelY = Math.min(safeBottom - 8, items[i - 1].labelY + minGap);
+          }
+        }
+      };
+
+      resolveOverlap(raw.filter((p) => p.align === 'left'));
+      resolveOverlap(raw.filter((p) => p.align === 'right'));
+
+      const sig = `${leftOpen ? 1 : 0}:${rightOpen ? 1 : 0}|` + raw
+        .map(
+          (p) =>
+            `${p.site.id}:${p.status}:${p.illumPct}:${Math.round(p.sx)}:${Math.round(p.sy)}:${Math.round(p.labelY)}`
+        )
+        .join('|');
+
+      if (sig !== lastProjectionSig) {
+        lastProjectionSig = sig;
+        setProjectedPins(raw);
+      }
+    };
+
+    // 7. Render Loop (strictly non-blinking)
+    let animId: number;
     const animate = () => {
       animId = requestAnimationFrame(animate);
-      const elapsed = clock.getElapsedTime();
 
-      // Smooth Camera Fly-To Interpolation
       if (animTargetCamPos.current && animTargetControlsTarget.current) {
         camera.position.lerp(animTargetCamPos.current, 0.06);
         controls.target.lerp(animTargetControlsTarget.current, 0.06);
@@ -589,75 +1238,81 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         }
       }
 
-      // Idle Auto-Rotation
-      if (autoRotate && !animTargetCamPos.current) {
-        moonMesh.rotation.y += 0.002;
-        glowMesh.rotation.y += 0.002;
-        pinsGroup.rotation.y += 0.002;
-        landingZonesGroup.rotation.y += 0.002;
+      if (autoRotateRef.current && !animTargetCamPos.current) {
+        moonMesh.rotation.y += 0.0018;
+        overlayMesh.rotation.y += 0.0018;
+        pinsGroup.rotation.y += 0.0018;
+        landingZonesGroup.rotation.y += 0.0018;
       }
-
-      // Animate pulsing landing beacon rings
-      pinsGroup.children.forEach(pin => {
-        const ring = pin.getObjectByName('pulseRing');
-        if (ring) {
-          const scale = 1.0 + Math.sin(elapsed * 4.0) * 0.25;
-          ring.scale.set(scale, scale, scale);
-        }
-      });
 
       controls.update();
       renderer.render(scene, camera);
+      computeProjectedPins();
     };
     animate();
 
-    // Cleanup
     return () => {
+      isCleanedUp = true;
       cancelAnimationFrame(animId);
       window.removeEventListener('resize', handleResize);
+      resizeObserver.disconnect();
       if (renderer.domElement) {
         renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
         renderer.domElement.removeEventListener('pointermove', handlePointerMove);
       }
+      monoTexture.dispose();
+      normalTexture.dispose();
+      bumpTexture.dispose();
+      overlayTexture.dispose();
       controls.dispose();
       renderer.dispose();
       container.innerHTML = '';
     };
   }, []); // Run once on mount
 
-  // Update Sunlight Position according to simulated synodic offset
+  // Sync Overlay visibility & smooth opacity
+  useEffect(() => {
+    const mesh = overlayMeshRef.current;
+    if (!mesh) return;
+    mesh.visible = showAssessmentOverlay && overlayOpacity > 0;
+    const mat = mesh.material as THREE.MeshLambertMaterial;
+    mat.opacity = (overlayOpacity / 100) * 0.75;
+    mat.needsUpdate = true;
+  }, [showAssessmentOverlay, overlayOpacity]);
+
+  // Recompute RYG Assessment Overlay whenever landing parameters, sites, or synodic date/time changes
+  useEffect(() => {
+    const canvas = overlayCanvasRef.current;
+    const tex = overlayTextureRef.current;
+    if (!canvas || !tex) return;
+
+    if (!terrainGridRef.current || builtSitesSigRef.current !== sitesSignature) {
+      builtSitesSigRef.current = sitesSignature;
+      terrainGridRef.current = buildTerrainGrid(sites, bumpImgRef.current);
+    }
+
+    paintDynamicOverlayTexture(
+      terrainGridRef.current,
+      canvas,
+      tex,
+      lander,
+      sunIlluminationOffset
+    );
+  }, [lander, sunIlluminationOffset, sites, sitesSignature]);
+
+  // Align 3D Sunlight Terminator Vector identically with ephemeris model & RYG shadows
   useEffect(() => {
     if (!dirLightRef.current) return;
-    // Synodic month is 29.53 days: advance full 2*PI across the period
-    const synodicAngle = ((sunIlluminationOffset * 2 * Math.PI) / 29.53) + Math.PI * 0.25;
-    // Lunar axial tilt (obliquity to ecliptic) is 1.54 deg, creating grazing polar sun angles
-    const sunHeight = 1.0 + Math.sin(synodicAngle) * 0.35;
-    dirLightRef.current.position.set(
-      Math.cos(synodicAngle) * 14,
-      sunHeight,
-      Math.sin(synodicAngle) * 14
-    );
+    const { sunVec } = getSubsolarPoint(sunIlluminationOffset);
+    dirLightRef.current.position.set(sunVec.x * 16, sunVec.y * 16, sunVec.z * 16);
   }, [sunIlluminationOffset]);
 
-  // Update Material texture when slope heatmap toggle changes
-  useEffect(() => {
-    if (!moonMeshRef.current) return;
-    const mat = moonMeshRef.current.material as THREE.MeshStandardMaterial;
-    if (showSlopeHeatmap && slopeTextureRef.current) {
-      mat.map = slopeTextureRef.current;
-    } else if (naturalTextureRef.current) {
-      mat.map = naturalTextureRef.current;
-    }
-    mat.needsUpdate = true;
-  }, [showSlopeHeatmap]);
-
-  // Re-build 3D Pins & Landing Footprints whenever sites or selectedSite changes
+  // Rebuild pick spheres & single static thin ring around ONLY the selected site
   useEffect(() => {
     const pinsGroup = pinsGroupRef.current;
     const landingZonesGroup = landingZonesGroupRef.current;
     if (!pinsGroup || !landingZonesGroup) return;
 
-    // Clear previous pins
     while (pinsGroup.children.length > 0) {
       pinsGroup.remove(pinsGroup.children[0]);
     }
@@ -665,249 +1320,487 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       landingZonesGroup.remove(landingZonesGroup.children[0]);
     }
 
-    sites.forEach(site => {
+    sites.forEach((site) => {
       const isSelected = site.id === selectedSite.id;
-      const pos = latLonToVector3(site.coordinates.latitude, site.coordinates.longitude, MOON_RADIUS);
+      const pos = latLonToVector3(
+        site.coordinates.latitude,
+        site.coordinates.longitude,
+        MOON_RADIUS * 1.005
+      );
       const normal = pos.clone().normalize();
 
-      const siteGroup = new THREE.Group();
-      siteGroup.position.copy(pos);
-      siteGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-      siteGroup.userData = { site };
+      // Invisible surface hit target for 3D raycasting
+      const hitGeo = new THREE.SphereGeometry(0.11, 8, 8);
+      const hitMat = new THREE.MeshBasicMaterial({ visible: false });
+      const hitMesh = new THREE.Mesh(hitGeo, hitMat);
+      hitMesh.position.copy(pos);
+      hitMesh.userData = { site };
+      pinsGroup.add(hitMesh);
 
-      // Pin Color according to site risk with selected lander
-      const siteRisk = assessLandingSiteRisk(site, undefined, undefined, lander);
-      let pinColor = 0x10b981; // Green
-      if (siteRisk.overall_status === 'RED') {
-        pinColor = 0xef4444; // Red
-      } else if (siteRisk.overall_status === 'YELLOW') {
-        pinColor = 0xf59e0b; // Yellow
-      }
-
-      // 1. Beacon Stem (Mast)
-      const stemHeight = isSelected ? 0.38 : 0.26;
-      const stemGeo = new THREE.CylinderGeometry(0.015, 0.02, stemHeight, 8);
-      const stemMat = new THREE.MeshBasicMaterial({ color: isSelected ? 0xffffff : 0x94a3b8 });
-      const stemMesh = new THREE.Mesh(stemGeo, stemMat);
-      stemMesh.position.y = stemHeight / 2;
-      siteGroup.add(stemMesh);
-
-      // 2. Beacon Glowing Head (Sphere)
-      const headRadius = isSelected ? 0.08 : 0.055;
-      const headGeo = new THREE.SphereGeometry(headRadius, 16, 16);
-      const headMat = new THREE.MeshBasicMaterial({ 
-        color: pinColor,
-      });
-      const headMesh = new THREE.Mesh(headGeo, headMat);
-      headMesh.position.y = stemHeight;
-      siteGroup.add(headMesh);
-
-      // 3. Ground Landing Radar Target Circle (Pulsing ring)
-      const ringGeo = new THREE.RingGeometry(0.08, 0.11, 24);
-      const ringMat = new THREE.MeshBasicMaterial({ 
-        color: pinColor, 
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: isSelected ? 0.9 : 0.5,
-      });
-      const ringMesh = new THREE.Mesh(ringGeo, ringMat);
-      ringMesh.rotation.x = Math.PI / 2;
-      ringMesh.position.y = 0.01;
-      ringMesh.name = 'pulseRing';
-      siteGroup.add(ringMesh);
-
-      // 4. Outer Target Concentric Marker for Selected Site
+      // Static thin ring around the currently selected site ONLY
       if (isSelected) {
-        const outerRingGeo = new THREE.RingGeometry(0.16, 0.18, 32);
-        const outerRingMat = new THREE.MeshBasicMaterial({
-          color: 0x38bdf8,
+        const ringGeo = new THREE.RingGeometry(0.095, 0.11, 48);
+        const ringMat = new THREE.MeshBasicMaterial({
+          color: 0xffffff,
           side: THREE.DoubleSide,
           transparent: true,
-          opacity: 0.8,
+          opacity: 0.9,
         });
-        const outerRing = new THREE.Mesh(outerRingGeo, outerRingMat);
-        outerRing.rotation.x = Math.PI / 2;
-        outerRing.position.y = 0.012;
-        siteGroup.add(outerRing);
-      }
-
-      pinsGroup.add(siteGroup);
-
-      // 5. Landing Footprint Zone with Slope Visualisation around selected site
-      if (isSelected) {
-        const zoneGroup = new THREE.Group();
-        zoneGroup.position.copy(pos);
-        zoneGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
-
-        // Circular landing ellipse boundary (1 km nominal radius)
-        const ellipseGeo = new THREE.RingGeometry(0.24, 0.28, 36);
-        const ellipseMat = new THREE.MeshBasicMaterial({
-          color: pinColor,
-          side: THREE.DoubleSide,
-          transparent: true,
-          opacity: 0.85,
-        });
-        const ellipseMesh = new THREE.Mesh(ellipseGeo, ellipseMat);
-        ellipseMesh.rotation.x = Math.PI / 2;
-        ellipseMesh.position.y = 0.015;
-        zoneGroup.add(ellipseMesh);
-
-        // Crosshairs in landing target
-        const lineMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.6 });
-        const crosshairPoints = [
-          new THREE.Vector3(-0.35, 0.015, 0),
-          new THREE.Vector3(0.35, 0.015, 0),
-          new THREE.Vector3(0, 0.015, -0.35),
-          new THREE.Vector3(0, 0.015, 0.35),
-        ];
-        const lineGeo = new THREE.BufferGeometry().setFromPoints(crosshairPoints);
-        const crosshairs = new THREE.LineSegments(lineGeo, lineMat);
-        zoneGroup.add(crosshairs);
-
-        landingZonesGroup.add(zoneGroup);
+        const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+        ringMesh.position.copy(pos);
+        ringMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
+        ringMesh.rotateX(Math.PI / 2);
+        landingZonesGroup.add(ringMesh);
       }
     });
-  }, [sites, selectedSite, lander]);
+  }, [sites, selectedSite]);
 
-  // When selectedSite changes externally, fly to it automatically
+  // Only fly camera when user changes selectedSite after initial orbital overview
   useEffect(() => {
+    if (!hasMountedFlyRef.current) {
+      hasMountedFlyRef.current = true;
+      return;
+    }
     flyToSite(selectedSite);
   }, [selectedSite, flyToSite]);
 
+  const statusHex = (status: RiskLevel) => {
+    if (status === 'RED') return '#EF4444';
+    if (status === 'YELLOW') return '#F59E0B';
+    return '#10B981';
+  };
+
+  const hoveredMetric = hoveredSite ? siteMetricsMap.get(hoveredSite.id) : null;
+
   return (
-    <div className="relative w-full h-[520px] rounded-2xl overflow-hidden border border-slate-800 bg-space-950/80 shadow-2xl flex flex-col">
+    <div className="relative w-full h-full overflow-hidden bg-black flex flex-col">
       {/* 3D WebGL Canvas Mount Container */}
       <div ref={mountRef} className="w-full h-full flex-1 cursor-grab active:cursor-grabbing" />
 
-      {/* Top HUD: Status Bar & Controls */}
-      <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none">
-        {/* Left: View Mode Badge */}
-        <div className="pointer-events-auto flex items-center gap-2 bg-space-900/85 backdrop-blur-md px-3 py-1.5 rounded-lg border border-slate-700/80 text-xs font-mono text-slate-200 shadow-md">
-          <Compass className="w-4 h-4 text-cyan-400" />
-          <span>3D LUNAR VIEW: <span className="text-cyan-300 font-bold">{isZoomedIn ? 'DESCENT INSPECTION' : 'ORBITAL OVERVIEW'}</span></span>
+      {/* Projected Screen-Space SpaceX Telemetry Markers (Non-Blinking) */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden z-10">
+        {/* SVG Leader Lines */}
+        <svg className="absolute inset-0 w-full h-full">
+          {projectedPins.map((pin) => {
+            const isSelected = pin.site.id === selectedSite.id;
+            return (
+              <line
+                key={`line-${pin.site.id}`}
+                x1={pin.sx}
+                y1={pin.sy}
+                x2={pin.labelX}
+                y2={pin.labelY}
+                stroke={isSelected ? 'rgba(255, 255, 255, 0.78)' : 'rgba(255, 255, 255, 0.32)'}
+                strokeWidth={1}
+              />
+            );
+          })}
+        </svg>
+
+        {/* Crisp Telemetry Dots + Static Ring (Selected Only) + Offset Labels */}
+        {projectedPins.map((pin) => {
+          const isSelected = pin.site.id === selectedSite.id;
+          const hex = statusHex(pin.status);
+          const shortName = SHORT_NAMES[pin.site.id] || pin.site.name.toUpperCase().slice(0, 12);
+
+          return (
+            <React.Fragment key={pin.site.id}>
+              {/* 7px Dot with 1px white border + optional static selection ring */}
+              <div
+                style={{
+                  position: 'absolute',
+                  left: pin.sx,
+                  top: pin.sy,
+                  transform: 'translate(-50%, -50%)',
+                }}
+                className="pointer-events-auto cursor-pointer flex items-center justify-center"
+                onClick={() => onSelectSite(pin.site)}
+                onMouseEnter={() => setHoveredSite(pin.site)}
+                onMouseLeave={() => setHoveredSite(null)}
+              >
+                {isSelected && (
+                  <span
+                    className="absolute w-[19px] h-[19px] rounded-full border border-white/90"
+                    aria-hidden="true"
+                  />
+                )}
+                <span
+                  style={{ backgroundColor: hex }}
+                  className="w-[7px] h-[7px] rounded-full border border-white block"
+                />
+              </div>
+
+              {/* Crisp Carbon Leader-Line Label */}
+              <button
+                type="button"
+                onClick={() => onSelectSite(pin.site)}
+                onMouseEnter={() => setHoveredSite(pin.site)}
+                onMouseLeave={() => setHoveredSite(null)}
+                style={{
+                  position: 'absolute',
+                  left: pin.labelX,
+                  top: pin.labelY,
+                  transform:
+                    pin.align === 'left' ? 'translate(-100%, -50%)' : 'translate(0, -50%)',
+                }}
+                className={`pointer-events-auto cursor-pointer flex items-center gap-1.5 px-2 py-0.5 rounded-[2px] border font-mono text-[10px] uppercase tracking-wider whitespace-nowrap transition-colors ${
+                  isSelected
+                    ? 'bg-[#090A0D] border-white/60 text-white'
+                    : 'bg-[#090A0D]/90 border-white/[0.14] text-[#9CA3AF] hover:text-white hover:border-white/35'
+                }`}
+              >
+                <span
+                  style={{ backgroundColor: hex }}
+                  className="w-1.5 h-1.5 rounded-full shrink-0"
+                />
+                <span className="font-semibold text-white">{shortName}</span>
+                <span className="text-[#6B7280] tabular-nums">
+                  {pin.site.terrain.slope_deg.toFixed(1)}° · {pin.illumPct}%
+                </span>
+              </button>
+            </React.Fragment>
+          );
+        })}
+      </div>
+
+      {/* Top HUD: View Mode, Floating Overlay Control Pill, Camera Actions */}
+      <div
+        className={`absolute top-3 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} ${rightDrawerOpen ? 'lg:right-[512px] right-3' : 'right-3'} flex flex-wrap items-center justify-between gap-2 pointer-events-none z-20 transition-all duration-300`}
+      >
+        {/* Left: View Mode Readout */}
+        <div className="pointer-events-auto flex items-center gap-2 bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF]">
+          <Compass className="w-3.5 h-3.5 text-white" />
+          <span>
+            VIEW //{' '}
+            <span className="text-white font-semibold">
+              {isZoomedIn ? 'DESCENT INSPECTION' : 'ORBITAL OVERVIEW'}
+            </span>
+          </span>
+        </div>
+
+        {/* Center: Floating HUD Overlay Control Pill */}
+        <div className="pointer-events-auto flex flex-wrap items-center gap-3 bg-[#090A0D]/95 px-3 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider">
+          <button
+            type="button"
+            onClick={() => setShowAssessmentOverlay((prev) => !prev)}
+            aria-pressed={showAssessmentOverlay}
+            className="flex items-center gap-2 text-white hover:opacity-90 transition"
+            title="Toggle dynamic Red / Yellow / Green landing assessment overlay"
+          >
+            <span className="text-[#9CA3AF]">Landing Assessment Overlay:</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-[2px] border font-bold ${
+                showAssessmentOverlay
+                  ? 'bg-white text-black border-white'
+                  : 'bg-[#12141A] text-[#9CA3AF] border-white/[0.14]'
+              }`}
+            >
+              {showAssessmentOverlay ? 'ON' : 'OFF'}
+            </span>
+          </button>
+
+          <div className="h-3.5 w-px bg-white/[0.14] hidden sm:block" />
+
+          <div className="flex items-center gap-2">
+            <label htmlFor="overlay-opacity-slider" className="text-[#9CA3AF] whitespace-nowrap">
+              Overlay Opacity
+            </label>
+            <input
+              id="overlay-opacity-slider"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={overlayOpacity}
+              onChange={(e) => setOverlayOpacity(Number(e.target.value))}
+              className="w-24"
+            />
+            <span className="text-white font-bold tabular-nums w-8 text-right">
+              {overlayOpacity}%
+            </span>
+          </div>
         </div>
 
         {/* Right: Quick Action Buttons */}
-        <div className="pointer-events-auto flex items-center gap-2">
-          {/* Drop-a-Pin Coordinate Probe Mode Button */}
+        <div className="pointer-events-auto relative flex items-center gap-1.5">
           <button
-            onClick={() => setIsProbeMode(prev => !prev)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono transition shadow-md border ${
-              isProbeMode 
-                ? 'bg-cyan-500 text-slate-950 font-bold border-cyan-400 shadow-[0_0_15px_rgba(6,182,212,0.4)] animate-pulse' 
-                : 'bg-space-900/85 text-slate-300 border-slate-700/80 hover:bg-space-800'
+            type="button"
+            onClick={() => {
+              setIsCoordInputOpen((prev) => !prev);
+              setIsProbeMode(false);
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${
+              isCoordInputOpen
+                ? 'bg-white text-black font-bold border-white'
+                : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
             }`}
-            title="Click anywhere on the 3D Moon to probe local landing parameters"
+            title="Enter custom lunar latitude & longitude coordinates"
+          >
+            <Crosshair className="w-3.5 h-3.5" />
+            <span>COORDS</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              setIsProbeMode((prev) => !prev);
+              setIsCoordInputOpen(false);
+            }}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${
+              isProbeMode
+                ? 'bg-white text-black font-bold border-white'
+                : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
+            }`}
+            title="Click anywhere on the lunar surface to probe local terrain parameters"
           >
             <MapPin className="w-3.5 h-3.5" />
-            <span>{isProbeMode ? 'CLICK ON MOON' : 'PROBE MODE'}</span>
+            <span>{isProbeMode ? 'CLICK SURFACE' : 'PROBE'}</span>
           </button>
 
-          {/* Slope Map Toggle */}
           <button
-            onClick={() => setShowSlopeHeatmap(prev => !prev)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono transition shadow-md border ${
-              showSlopeHeatmap 
-                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/30' 
-                : 'bg-space-900/85 text-slate-300 border-slate-700/80 hover:bg-space-800'
+            type="button"
+            onClick={() => setAutoRotate((prev) => !prev)}
+            className={`p-1.5 rounded-[2px] text-[10px] transition border ${
+              autoRotate
+                ? 'bg-white text-black border-white'
+                : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
             }`}
-            title="Toggle NASA LOLA Slope Heatmap"
+            title="Toggle orbital rotation"
           >
-            <Layers className="w-3.5 h-3.5" />
-            <span>LOLA Slope: {showSlopeHeatmap ? 'ACTIVE' : 'NATURAL'}</span>
+            <RotateCw className="w-3.5 h-3.5" />
           </button>
 
-          {/* Auto Rotate Toggle */}
           <button
-            onClick={() => setAutoRotate(prev => !prev)}
-            className={`p-2 rounded-lg text-xs transition border ${
-              autoRotate 
-                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40' 
-                : 'bg-space-900/85 text-slate-400 border-slate-700/80 hover:text-slate-200'
-            }`}
-            title="Toggle Cinematic Orbit Rotation"
-          >
-            <RotateCw className={`w-3.5 h-3.5 ${autoRotate ? 'animate-spin' : ''}`} />
-          </button>
-
-          {/* Zoom to South Pole */}
-          <button
+            type="button"
             onClick={zoomToSouthPole}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-space-900/85 hover:bg-space-800 border border-slate-700/80 text-xs font-mono text-slate-300 transition"
-            title="Zoom into Artemis South Pole Target Zone"
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-[2px] bg-[#090A0D]/95 hover:bg-[#12141A] border border-white/[0.14] hover:border-white/35 text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF] hover:text-white transition"
+            title="Zoom into Artemis South Pole cluster"
           >
-            <ZoomIn className="w-3.5 h-3.5 text-cyan-400" />
+            <ZoomIn className="w-3.5 h-3.5" />
             <span>South Pole</span>
           </button>
 
-          {/* Reset View */}
           <button
+            type="button"
             onClick={resetToGlobalView}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-space-900/85 hover:bg-space-800 border border-slate-700/80 text-xs font-mono text-slate-300 transition"
-            title="Reset to Full Lunar Globe View"
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded-[2px] bg-[#090A0D]/95 hover:bg-[#12141A] border border-white/[0.14] hover:border-white/35 text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF] hover:text-white transition"
+            title="Reset to orbital overview"
           >
-            <Maximize2 className="w-3.5 h-3.5 text-slate-400" />
+            <Maximize2 className="w-3.5 h-3.5" />
             <span>Reset</span>
           </button>
+
+          {/* Compact SpaceX Coordinate Targeting Popover */}
+          {isCoordInputOpen && (
+            <form
+              onSubmit={handleDeployCoordTarget}
+              className="absolute right-0 top-10 w-64 bg-[#090A0D]/98 border border-white/25 rounded-[2px] p-3 space-y-2.5 z-30 font-mono shadow-none"
+            >
+              <div className="flex items-center justify-between border-b border-white/[0.12] pb-1.5">
+                <span className="text-[10px] uppercase tracking-wider text-white font-semibold flex items-center gap-1.5">
+                  <Crosshair className="w-3 h-3" /> Target Coordinate Entry
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsCoordInputOpen(false)}
+                  className="text-[10px] text-[#6B7280] hover:text-white uppercase"
+                >
+                  ESC
+                </button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label htmlFor="hud-coord-lat" className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1">
+                    LAT (-90..90)
+                  </label>
+                  <input
+                    id="hud-coord-lat"
+                    type="number"
+                    step="0.01"
+                    min={-90}
+                    max={90}
+                    value={latInput}
+                    onChange={(e) => setLatInput(e.target.value)}
+                    className="w-full px-2 py-1 bg-[#000000] border border-white/[0.16] rounded-[2px] text-[11px] text-white tabular-nums focus:outline-none focus:border-white/60"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="hud-coord-lon" className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1">
+                    LON (-180..180)
+                  </label>
+                  <input
+                    id="hud-coord-lon"
+                    type="number"
+                    step="0.01"
+                    min={-180}
+                    max={180}
+                    value={lonInput}
+                    onChange={(e) => setLonInput(e.target.value)}
+                    className="w-full px-2 py-1 bg-[#000000] border border-white/[0.16] rounded-[2px] text-[11px] text-white tabular-nums focus:outline-none focus:border-white/60"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label htmlFor="hud-coord-label" className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1">
+                  SITE DESIGNATION (OPT)
+                </label>
+                <input
+                  id="hud-coord-label"
+                  type="text"
+                  placeholder="E.G. HAWORTH RIDGE ALPHA"
+                  value={labelInput}
+                  onChange={(e) => setLabelInput(e.target.value)}
+                  className="w-full px-2 py-1 bg-[#000000] border border-white/[0.16] rounded-[2px] text-[10px] text-white uppercase tracking-wider placeholder:text-[#4B5563] focus:outline-none focus:border-white/60"
+                />
+              </div>
+
+              {coordError && (
+                <div className="text-[9px] text-[#EF4444] uppercase tracking-wider">
+                  {coordError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-1.5 bg-white text-black hover:bg-neutral-200 rounded-[2px] text-[10px] font-bold uppercase tracking-widest transition"
+              >
+                DEPLOY &amp; FLY TO TARGET
+              </button>
+            </form>
+          )}
         </div>
       </div>
 
       {/* Active Probe Banner */}
       {isProbeMode && (
-        <div className="absolute top-16 left-1/2 -translate-x-1/2 bg-cyan-950/90 border border-cyan-400 backdrop-blur-md px-4 py-1.5 rounded-full text-xs font-mono text-cyan-200 shadow-2xl flex items-center gap-2 animate-bounce z-10 pointer-events-none">
-          <MapPin className="w-4 h-4 text-cyan-400 animate-pulse" />
+        <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-[#090A0D]/95 border border-white/40 px-3.5 py-1 rounded-[2px] text-[10px] font-mono uppercase tracking-wider text-white flex items-center gap-2 z-20 pointer-events-none">
+          <MapPin className="w-3.5 h-3.5 text-white" />
           <span>Click anywhere on lunar surface to probe coordinates</span>
         </div>
       )}
 
       {/* Hover Pin Tooltip HUD */}
-      {hoveredSite && (
-        <div className="absolute top-16 left-4 pointer-events-none bg-space-900/90 backdrop-blur-md px-3.5 py-2 rounded-lg border border-cyan-500/40 text-xs font-mono text-slate-200 shadow-xl flex items-center gap-2.5 animate-fadeIn">
-          <div className={`w-2.5 h-2.5 rounded-full ${
-            hoveredSite.terrain.slope_deg <= 6 ? 'bg-emerald-400' : hoveredSite.terrain.slope_deg <= 12 ? 'bg-amber-400' : 'bg-rose-400'
-          }`} />
+      {hoveredSite && hoveredMetric && (
+        <div
+          className={`absolute top-14 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} pointer-events-none bg-[#090A0D]/95 px-3 py-1.5 rounded-[2px] border border-white/[0.14] text-[11px] font-mono text-white flex items-center gap-2 z-20 transition-all duration-300`}
+        >
+          <div
+            style={{ backgroundColor: statusHex(hoveredMetric.status) }}
+            className="w-2 h-2 rounded-full border border-white shrink-0"
+          />
           <div>
-            <div className="font-bold text-white">{hoveredSite.name}</div>
-            <div className="text-[11px] text-slate-400">Slope: {hoveredSite.terrain.slope_deg}° • Illum: {hoveredSite.defaultIlluminationPct}%</div>
+            <div className="font-bold uppercase tracking-wider text-white">{hoveredSite.name}</div>
+            <div className="text-[10px] text-[#9CA3AF] tabular-nums">
+              SLOPE {hoveredSite.terrain.slope_deg.toFixed(1)}° · ILLUM {hoveredMetric.illumPct}% ·{' '}
+              {hoveredMetric.hasLos ? 'DTE OK' : 'NO DTE'}
+            </div>
           </div>
         </div>
       )}
 
-      {/* Bottom HUD: Dynamic Slope Legend & Coordinates Telemetry */}
-      <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between pointer-events-none">
-        {/* LOLA Slope Color Legend */}
-        {showSlopeHeatmap && (
-          <div className="pointer-events-auto bg-space-900/85 backdrop-blur-md px-3.5 py-2 rounded-lg border border-slate-700/80 text-[11px] font-mono shadow-md flex items-center gap-4">
-            <span className="text-slate-400 font-semibold flex items-center gap-1">
-              <Info className="w-3.5 h-3.5 text-cyan-400" /> LOLA Slope Index:
-            </span>
-            <div className="flex items-center gap-1.5 text-emerald-400">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400"></span>
-              <span>&lt; 5° (Safe)</span>
+      {/* Bottom HUD: Dynamic Overlay Legend, Mission UTC Clock Bar & Selected Site Coordinates */}
+      <div
+        className={`absolute bottom-3 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} ${rightDrawerOpen ? 'lg:right-[512px] right-3' : 'right-3'} flex flex-wrap items-center justify-between gap-2 pointer-events-none z-20 transition-all duration-300`}
+      >
+        {showAssessmentOverlay && overlayOpacity > 0 && (
+          <div className="pointer-events-auto bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider flex items-center gap-3">
+            <span className="text-[#6B7280]">RYG</span>
+            <div className="flex items-center gap-1 text-[#10B981]">
+              <span className="w-2 h-2 rounded-full bg-[#10B981] border border-white/60" />
+              <span>GO</span>
             </div>
-            <div className="flex items-center gap-1.5 text-amber-400">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span>
-              <span>5°–15° (Caution)</span>
+            <div className="flex items-center gap-1 text-[#F59E0B]">
+              <span className="w-2 h-2 rounded-full bg-[#F59E0B] border border-white/60" />
+              <span>CAUTION</span>
             </div>
-            <div className="flex items-center gap-1.5 text-rose-400">
-              <span className="w-2.5 h-2.5 rounded-full bg-rose-400"></span>
-              <span>&gt; 15° (Hazard)</span>
+            <div className="flex items-center gap-1 text-[#EF4444]">
+              <span className="w-2 h-2 rounded-full bg-[#EF4444] border border-white/60" />
+              <span>NO-GO</span>
             </div>
           </div>
         )}
 
-        {/* Selected Site Coordinates Telemetry HUD */}
-        <div className="pointer-events-auto ml-auto bg-space-900/85 backdrop-blur-md px-3.5 py-2 rounded-lg border border-slate-700/80 text-[11px] font-mono text-slate-300 shadow-md flex items-center gap-3">
-          <span className="text-cyan-400 font-bold">{selectedSite.name}:</span>
-          <span>Lat: {selectedSite.coordinates.latitude}°</span>
-          <span>Lon: {selectedSite.coordinates.longitude}°</span>
-          <span>Elev: {selectedSite.coordinates.elevation_m}m</span>
-        </div>
-      </div>
+        {/* Mission UTC Date/Time Control Pill */}
+        {onChangeDateOffset && (
+          <div className="pointer-events-auto bg-[#090A0D]/95 px-2.5 py-1 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider flex flex-wrap items-center gap-1.5">
+            <Clock className="w-3 h-3 text-[#9CA3AF] shrink-0" />
+            <input
+              aria-label="Mission UTC Date"
+              type="date"
+              value={utcDateInput}
+              onChange={(e) => applyUtcChange(e.target.value, utcTimeInput)}
+              className="bg-[#000000] border border-white/[0.14] rounded-[2px] px-1.5 py-0.5 text-[10px] text-white tabular-nums [color-scheme:dark] focus:outline-none focus:border-white/50"
+            />
+            <input
+              aria-label="Mission UTC Time"
+              type="time"
+              value={utcTimeInput}
+              onChange={(e) => applyUtcChange(utcDateInput, e.target.value)}
+              className="bg-[#000000] border border-white/[0.14] rounded-[2px] px-1.5 py-0.5 text-[10px] text-white tabular-nums [color-scheme:dark] focus:outline-none focus:border-white/50"
+            />
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onChangeDateOffset(Math.max(-14.77, sunIlluminationOffset - 1))}
+                className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
+              >
+                -1D
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeDateOffset(Math.max(-14.77, sunIlluminationOffset - 0.25))}
+                className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
+              >
+                -6H
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeDateOffset(0)}
+                className={`px-1.5 py-0.5 border border-white/[0.12] rounded-[2px] text-[9px] transition ${
+                  Math.abs(sunIlluminationOffset) < 0.02
+                    ? 'bg-white text-black font-bold'
+                    : 'bg-[#12141A] hover:bg-white/15 text-[#9CA3AF] hover:text-white'
+                }`}
+              >
+                T0
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeDateOffset(Math.min(14.77, sunIlluminationOffset + 0.25))}
+                className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
+              >
+                +6H
+              </button>
+              <button
+                type="button"
+                onClick={() => onChangeDateOffset(Math.min(14.77, sunIlluminationOffset + 1))}
+                className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
+              >
+                +1D
+              </button>
+            </div>
+            <span
+              className={`px-1.5 py-0.5 rounded-[2px] border text-[9px] font-bold tabular-nums ${
+                selectedSolarTelemetry.isSunlit
+                  ? 'border-[#10B981]/50 text-[#10B981] bg-[#10B981]/10'
+                  : 'border-[#EF4444]/50 text-[#EF4444] bg-[#EF4444]/10'
+              }`}
+            >
+              SUN {selectedSolarTelemetry.effectiveSunElevDeg >= 0 ? '+' : ''}
+              {selectedSolarTelemetry.effectiveSunElevDeg.toFixed(1)}° ·{' '}
+              {selectedSolarTelemetry.isSunlit ? 'SUNLIT' : 'SHADOW'}
+            </span>
+          </div>
+        )}
 
-      {/* Interactive Helper Overlay note */}
-      <div className="absolute bottom-16 right-4 pointer-events-none text-[10px] font-mono text-slate-500 bg-space-950/60 px-2 py-1 rounded border border-slate-800/40">
-        Drag: Orbit • Scroll: Zoom • Click Pin: Fly to Site
+        <div className="pointer-events-auto ml-auto bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF] flex items-center gap-2.5 tabular-nums">
+          <span className="text-white font-semibold">{selectedSite.name}</span>
+          <span>LAT {selectedSite.coordinates.latitude}°</span>
+          <span>LON {selectedSite.coordinates.longitude}°</span>
+          <span>ELEV {selectedSite.coordinates.elevation_m}M</span>
+        </div>
       </div>
     </div>
   );

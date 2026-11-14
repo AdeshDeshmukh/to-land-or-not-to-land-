@@ -1,5 +1,6 @@
 import React from 'react';
 import { LanderProfile } from '../types';
+import { Term } from './Glossary';
 import { 
   Sliders, 
   RotateCcw, 
@@ -20,8 +21,8 @@ export const DEFAULT_MISSION_PARAMETERS: LanderProfile = {
   name: 'Mission Safety Parameters',
   agency: 'Artemis Criteria',
   subtitle: 'Configured Landing Constraints',
-  maxSlopeDeg: 8.0,
-  minIlluminationPct: 65,
+  maxSlopeDeg: 10.0,
+  minIlluminationPct: 60,
   requiresEarthLos: true,
   maxRoughness: 'MODERATE',
   payloadCapacityKg: 15000,
@@ -57,18 +58,18 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
   };
 
   return (
-    <div className="bg-space-900/90 border border-slate-800 rounded-xl p-4 shadow-lg space-y-3.5 backdrop-blur-md">
+    <div className="bg-[#090A0D] border border-white/[0.14] rounded-[2px] p-4 space-y-3.5">
       {/* Panel Header */}
-      <div className="flex items-center justify-between border-b border-slate-800/80 pb-2.5">
+      <div className="flex items-center justify-between border-b border-white/[0.14] pb-2.5">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
-            <Sliders className="w-4 h-4" />
+          <div className="w-7 h-7 rounded-[2px] bg-[#12141A] border border-white/[0.14] flex items-center justify-center text-[#9CA3AF]">
+            <Sliders className="w-3.5 h-3.5" />
           </div>
           <div>
-            <span className="text-[10px] font-mono uppercase tracking-wider text-cyan-400 font-semibold block leading-none">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-[#6B7280] font-semibold block leading-none">
               Safety Constraints
             </span>
-            <h3 className="text-sm font-bold text-white tracking-tight leading-tight mt-0.5">
+            <h3 className="text-xs font-mono font-bold text-white uppercase tracking-wider leading-tight mt-0.5">
               Landing Parameters
             </h3>
           </div>
@@ -76,23 +77,23 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
 
         <button
           onClick={handleReset}
-          className="p-1.5 rounded-lg bg-slate-800/80 hover:bg-slate-700 text-slate-400 hover:text-slate-200 border border-slate-700/60 transition"
-          title="Reset to Artemis nominal defaults"
+          className="p-1.5 rounded-[2px] bg-[#12141A] hover:bg-[#1C1F26] text-[#9CA3AF] hover:text-white border border-white/[0.14] transition"
+          title="Reset to nominal Artemis criteria"
         >
           <RotateCcw className="w-3.5 h-3.5" />
         </button>
       </div>
 
       {/* Main Interactive Controls */}
-      <div className="space-y-3">
+      <div className="space-y-2.5">
         
         {/* 1. Maximum Ground Slope Slider */}
-        <div className="space-y-1 bg-space-950/60 p-2.5 rounded-lg border border-slate-800/70">
-          <div className="flex items-center justify-between text-xs font-mono">
-            <span className="text-slate-300 font-medium flex items-center gap-1.5">
-              <Shield className="w-3.5 h-3.5 text-cyan-400" /> Max Ground Slope:
+        <div className="space-y-1.5 bg-black p-2.5 rounded-[2px] border border-white/[0.14]">
+          <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider">
+            <span className="text-[#9CA3AF] flex items-center gap-1.5">
+              <Shield className="w-3.5 h-3.5 text-[#9CA3AF]" /> Max Ground <Term k="slope">Slope</Term>
             </span>
-            <span className="px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-bold">
+            <span className="px-2 py-0.5 rounded-[2px] bg-white/[0.08] text-white border border-white/20 font-bold tabular-nums">
               {parameters.maxSlopeDeg.toFixed(1)}°
             </span>
           </div>
@@ -103,22 +104,22 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
             step="0.5"
             value={parameters.maxSlopeDeg}
             onChange={(e) => handleUpdate('maxSlopeDeg', parseFloat(e.target.value))}
-            className="w-full accent-cyan-400 bg-slate-800 rounded-lg h-1.5 cursor-pointer"
+            className="w-full"
           />
-          <div className="flex justify-between text-[10px] font-mono text-slate-400">
+          <div className="flex justify-between text-[9px] font-mono uppercase tracking-wider text-[#6B7280]">
             <span>3° Strict</span>
-            <span>8° Standard</span>
+            <span>10° Standard</span>
             <span>20° Max</span>
           </div>
         </div>
 
         {/* 2. Minimum Solar Illumination Slider */}
-        <div className="space-y-1 bg-space-950/60 p-2.5 rounded-lg border border-slate-800/70">
-          <div className="flex items-center justify-between text-xs font-mono">
-            <span className="text-slate-300 font-medium flex items-center gap-1.5">
-              <Sun className="w-3.5 h-3.5 text-amber-400" /> Min Solar Flux:
+        <div className="space-y-1.5 bg-black p-2.5 rounded-[2px] border border-white/[0.14]">
+          <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider">
+            <span className="text-[#9CA3AF] flex items-center gap-1.5">
+              <Sun className="w-3.5 h-3.5 text-[#9CA3AF]" /> Min <Term k="illumination">Solar Flux</Term>
             </span>
-            <span className="px-2 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/30 font-bold">
+            <span className="px-2 py-0.5 rounded-[2px] bg-white/[0.08] text-white border border-white/20 font-bold tabular-nums">
               {parameters.minIlluminationPct}%
             </span>
           </div>
@@ -129,24 +130,24 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
             step="5"
             value={parameters.minIlluminationPct}
             onChange={(e) => handleUpdate('minIlluminationPct', parseInt(e.target.value, 10))}
-            className="w-full accent-amber-400 bg-slate-800 rounded-lg h-1.5 cursor-pointer"
+            className="w-full"
           />
-          <div className="flex justify-between text-[10px] font-mono text-slate-400">
+          <div className="flex justify-between text-[9px] font-mono uppercase tracking-wider text-[#6B7280]">
             <span>10% Low</span>
-            <span>50% Mid</span>
+            <span>60% Mid</span>
             <span>90% High</span>
           </div>
         </div>
 
         {/* 3. Direct-to-Earth (DTE) Comms Toggle */}
-        <div className="bg-space-950/60 p-2.5 rounded-lg border border-slate-800/70 flex items-center justify-between">
+        <div className="bg-black p-2.5 rounded-[2px] border border-white/[0.14] flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Radio className="w-4 h-4 text-cyan-400" />
+            <Radio className="w-3.5 h-3.5 text-[#9CA3AF]" />
             <div>
-              <span className="text-xs font-mono font-medium text-slate-200 block">
-                Direct Earth Link (DTE)
+              <span className="text-[11px] font-mono uppercase tracking-wider font-medium text-white block">
+                <Term k="dte">Direct Earth Link (DTE)</Term>
               </span>
-              <span className="text-[10px] text-slate-400 block">
+              <span className="text-[10px] font-mono text-[#6B7280] block">
                 {parameters.requiresEarthLos ? 'Direct DSN required' : 'Relay supported'}
               </span>
             </div>
@@ -154,10 +155,10 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
 
           <button
             onClick={() => handleUpdate('requiresEarthLos', !parameters.requiresEarthLos)}
-            className={`px-2.5 py-1 rounded text-xs font-mono font-semibold transition ${
+            className={`px-2.5 py-1 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition ${
               parameters.requiresEarthLos 
-                ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40' 
-                : 'bg-slate-800 text-slate-400 border border-slate-700/60'
+                ? 'bg-white text-black border border-white font-bold' 
+                : 'bg-[#12141A] text-[#9CA3AF] border border-white/[0.14] hover:text-white hover:border-white/30'
             }`}
           >
             {parameters.requiresEarthLos ? 'Required' : 'Optional'}
@@ -165,22 +166,22 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
         </div>
 
         {/* 4. Roughness Tolerance */}
-        <div className="bg-space-950/60 p-2.5 rounded-lg border border-slate-800/70 space-y-1.5">
-          <div className="flex items-center justify-between text-xs font-mono">
-            <span className="text-slate-300 font-medium flex items-center gap-1.5">
-              <Layers className="w-3.5 h-3.5 text-slate-400" /> Roughness Limit:
+        <div className="bg-black p-2.5 rounded-[2px] border border-white/[0.14] space-y-1.5">
+          <div className="flex items-center justify-between text-[11px] font-mono uppercase tracking-wider">
+            <span className="text-[#9CA3AF] flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-[#9CA3AF]" /> <Term k="roughness">Roughness</Term> Limit
             </span>
-            <span className="text-slate-200 font-bold">{parameters.maxRoughness}</span>
+            <span className="text-white font-bold">{parameters.maxRoughness}</span>
           </div>
           <div className="grid grid-cols-3 gap-1">
             {(['LOW', 'MODERATE', 'HIGH'] as const).map((level) => (
               <button
                 key={level}
                 onClick={() => handleUpdate('maxRoughness', level)}
-                className={`py-1 px-1 rounded text-[10px] font-mono transition text-center ${
+                className={`py-1 px-1 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition text-center ${
                   parameters.maxRoughness === level
-                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 font-bold'
-                    : 'bg-slate-800/60 text-slate-400 hover:text-slate-200 border border-transparent'
+                    ? 'bg-white text-black border border-white font-bold'
+                    : 'bg-[#12141A] text-[#9CA3AF] hover:text-white border border-white/[0.14] hover:border-white/30'
                 }`}
               >
                 {level === 'LOW' ? 'Low' : level === 'MODERATE' ? 'Moderate' : 'High'}
@@ -190,9 +191,9 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
         </div>
 
         {/* Quick Criteria Presets */}
-        <div className="border-t border-slate-800/80 pt-2">
-          <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider block mb-1.5 flex items-center gap-1">
-            <Sparkles className="w-3 h-3 text-cyan-400" /> Quick Presets
+        <div className="border-t border-white/[0.14] pt-2.5">
+          <span className="text-[10px] font-mono text-[#6B7280] uppercase tracking-wider block mb-1.5 flex items-center gap-1">
+            <Sparkles className="w-3 h-3 text-[#9CA3AF]" /> Quick Presets
           </span>
           <div className="grid grid-cols-3 gap-1">
             <button
@@ -202,18 +203,18 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
                 requiresEarthLos: true,
                 maxRoughness: 'LOW',
               })}
-              className="px-1.5 py-1 rounded bg-slate-800/60 hover:bg-slate-800 text-[10px] text-slate-300 border border-slate-700/60 transition text-center font-mono"
+              className="px-1.5 py-1 rounded-[2px] bg-[#12141A] hover:bg-[#1C1F26] text-[10px] text-[#9CA3AF] hover:text-white border border-white/[0.14] transition text-center font-mono uppercase tracking-wider"
             >
               Strict
             </button>
             <button
               onClick={() => handleApplyPreset({
-                maxSlopeDeg: 8.0,
-                minIlluminationPct: 65,
+                maxSlopeDeg: 10.0,
+                minIlluminationPct: 60,
                 requiresEarthLos: true,
                 maxRoughness: 'MODERATE',
               })}
-              className="px-1.5 py-1 rounded bg-slate-800/60 hover:bg-slate-800 text-[10px] text-cyan-300 border border-cyan-500/30 transition text-center font-mono"
+              className="px-1.5 py-1 rounded-[2px] bg-[#12141A] hover:bg-[#1C1F26] text-[10px] text-white border border-white/30 transition text-center font-mono uppercase tracking-wider font-semibold"
             >
               Artemis
             </button>
@@ -224,7 +225,7 @@ export const LandingParametersPanel: React.FC<LandingParametersPanelProps> = ({
                 requiresEarthLos: false,
                 maxRoughness: 'HIGH',
               })}
-              className="px-1.5 py-1 rounded bg-slate-800/60 hover:bg-slate-800 text-[10px] text-slate-300 border border-slate-700/60 transition text-center font-mono"
+              className="px-1.5 py-1 rounded-[2px] bg-[#12141A] hover:bg-[#1C1F26] text-[10px] text-[#9CA3AF] hover:text-white border border-white/[0.14] transition text-center font-mono uppercase tracking-wider"
             >
               Tolerant
             </button>
