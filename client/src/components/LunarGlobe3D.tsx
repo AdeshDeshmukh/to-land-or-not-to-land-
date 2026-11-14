@@ -1,7 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { CandidateSite } from '../types';
+import { CandidateSite, LanderProfile } from '../types';
+import { assessLandingSiteRisk } from '../engine/riskEngine';
 import { 
   Compass, 
   Layers, 
@@ -16,6 +17,7 @@ interface LunarGlobe3DProps {
   selectedSite: CandidateSite;
   onSelectSite: (site: CandidateSite) => void;
   sunIlluminationOffset?: number; // Days offset
+  lander?: LanderProfile;
 }
 
 const MOON_RADIUS = 3.5;
@@ -187,6 +189,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   selectedSite,
   onSelectSite,
   sunIlluminationOffset = 0,
+  lander,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [showSlopeHeatmap, setShowSlopeHeatmap] = useState<boolean>(true);
@@ -504,11 +507,12 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       siteGroup.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), normal);
       siteGroup.userData = { site };
 
-      // Pin Color according to site risk
+      // Pin Color according to site risk with selected lander
+      const siteRisk = assessLandingSiteRisk(site, undefined, undefined, lander);
       let pinColor = 0x10b981; // Green
-      if (site.terrain.slope_deg > 12 || !site.defaultEarthLos) {
+      if (siteRisk.overall_status === 'RED') {
         pinColor = 0xef4444; // Red
-      } else if (site.terrain.slope_deg > 6 || site.defaultIlluminationPct < 70) {
+      } else if (siteRisk.overall_status === 'YELLOW') {
         pinColor = 0xf59e0b; // Yellow
       }
 
@@ -595,7 +599,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         landingZonesGroup.add(zoneGroup);
       }
     });
-  }, [sites, selectedSite]);
+  }, [sites, selectedSite, lander]);
 
   // When selectedSite changes externally, fly to it automatically
   useEffect(() => {
