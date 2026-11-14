@@ -492,14 +492,17 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     };
   }, []); // Run once on mount
 
-  // Update Sunlight Position according to simulated offset
+  // Update Sunlight Position according to simulated synodic offset
   useEffect(() => {
     if (!dirLightRef.current) return;
-    const angle = (sunIlluminationOffset * 0.2) + Math.PI * 0.25;
+    // Synodic month is 29.53 days: advance full 2*PI across the period
+    const synodicAngle = ((sunIlluminationOffset * 2 * Math.PI) / 29.53) + Math.PI * 0.25;
+    // Lunar axial tilt (obliquity to ecliptic) is 1.54 deg, creating grazing polar sun angles
+    const sunHeight = 1.0 + Math.sin(synodicAngle) * 0.35;
     dirLightRef.current.position.set(
-      Math.cos(angle) * 12,
-      2,
-      Math.sin(angle) * 12
+      Math.cos(synodicAngle) * 14,
+      sunHeight,
+      Math.sin(synodicAngle) * 14
     );
   }, [sunIlluminationOffset]);
 
