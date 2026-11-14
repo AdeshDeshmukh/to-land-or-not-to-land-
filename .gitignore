@@ -147,3 +147,53 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+
+# ============================================
+# PROJECT-SPECIFIC ADDITIONS
+# ============================================
+
+# --- Python & Data Processing (offline scripts) ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+*.egg-info/
+
+# --- Operating System Files ---
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- IDE & Editor Files ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Scientific & Planetary Data (prevent repo bloat) ---
+# Raw planetary rasters and large binary datasets must be streamed
+# via APIs or hosted externally — never committed to Git.
+*.tif
+*.tiff
+*.dem
+*.img
+*.nc
+*.h5
+*.hdf
+*.fits
+*.tar.gz
+*.zip
+
+# --- Build outputs ---
+build/
+dist/
+
+# --- Scripts raw output (intermediate data before merge) ---
+scripts/output/*.json
+!scripts/output/.gitkeep
