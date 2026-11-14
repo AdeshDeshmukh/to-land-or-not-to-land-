@@ -81,8 +81,8 @@ interface PadTelemetry {
 
 const PATCH_SIZE_M = 2400;
 const HALF_PATCH_M = PATCH_SIZE_M / 2;
-const GRID_SEGMENTS = 159;
-const GRID_RES = GRID_SEGMENTS + 1; // 160x160 vertices -> 15.09 m/cell
+const GRID_SEGMENTS = 239;
+const GRID_RES = GRID_SEGMENTS + 1; // 240x240 vertices -> 10.04 m/cell
 const STEP_M = PATCH_SIZE_M / GRID_SEGMENTS;
 const WORLD_SIZE = 10;
 const M_TO_WORLD = WORLD_SIZE / PATCH_SIZE_M;
@@ -1271,7 +1271,7 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
           <div className="hidden sm:flex items-center gap-2 bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF]">
             <Mountain className="w-3.5 h-3.5 text-white" />
             <span>
-              LOCAL DEM // <strong className="text-white">2.4 KM × 2.4 KM · 15M/PX</strong>
+              LOCAL DEM // <strong className="text-white">2.4 KM × 2.4 KM · 10M/PX</strong>
             </span>
           </div>
         </div>
@@ -1481,8 +1481,8 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
         </div>
         <canvas
           ref={miniMapCanvasRef}
-          width={184}
-          height={184}
+          width={220}
+          height={220}
           onClick={handleMiniMapClick}
           className="border border-white/[0.14] rounded-[2px] cursor-crosshair block"
           title="Click anywhere on 2D contour map to place touchdown pad"

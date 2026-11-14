@@ -63,10 +63,12 @@ interface TerrainGrid {
 }
 
 const MOON_RADIUS = 3.5;
-const GRID_W = 512;
-const GRID_H = 256;
-const SURF_TEX_W = 2048;
-const SURF_TEX_H = 1024;
+const GRID_W = 1024;
+const GRID_H = 512;
+const ALBEDO_TEX_W = 4096;
+const ALBEDO_TEX_H = 2048;
+const NORM_TEX_W = 2048;
+const NORM_TEX_H = 1024;
 const MIN_CAM_DIST = 4.10;
 const MAX_CAM_DIST = 15.0;
 
@@ -124,7 +126,7 @@ function getCraterDescriptors(): CraterDescriptor[] {
     const center = latLonToCartesian(c.lat, c.lon, 1);
     const rRad = (c.radiusDeg * Math.PI) / 180;
     const rOuterRad = rRad * 1.48;
-    const steepScale = 0.072 * Math.min(1.20, 0.78 + 0.22 / Math.sqrt(Math.max(0.22, c.radiusDeg)));
+    const steepScale = 0.052 * Math.min(1.20, 0.78 + 0.22 / Math.sqrt(Math.max(0.22, c.radiusDeg)));
     return {
       cx: center.x,
       cy: center.y,
@@ -141,89 +143,72 @@ function getCraterDescriptors(): CraterDescriptor[] {
   return cachedCraterDescriptors;
 }
 
-// Isotropic 3D trilinear hash noise (completely non-periodic -> zero parallel stripe artifacts)
-function hash3(ix: number, iy: number, iz: number): number {
-  let n = (ix * 374761393 + iy * 668265263 + iz * 2147483647) | 0;
-  n = (n ^ (n >>> 13)) | 0;
-  n = Math.imul(n, 1274126177);
-  return ((n ^ (n >>> 16)) >>> 0) / 4294967295;
-}
-
-function noise3D(x: number, y: number, z: number): number {
-  const ix = Math.floor(x);
-  const iy = Math.floor(y);
-  const iz = Math.floor(z);
-  const fx = x - ix;
-  const fy = y - iy;
-  const fz = z - iz;
-  const ux = fx * fx * (3 - 2 * fx);
-  const uy = fy * fy * (3 - 2 * fy);
-  const uz = fz * fz * (3 - 2 * fz);
-
-  const c000 = hash3(ix, iy, iz);
-  const c100 = hash3(ix + 1, iy, iz);
-  const c010 = hash3(ix, iy + 1, iz);
-  const c110 = hash3(ix + 1, iy + 1, iz);
-  const c001 = hash3(ix, iy, iz + 1);
-  const c101 = hash3(ix + 1, iy, iz + 1);
-  const c011 = hash3(ix, iy + 1, iz + 1);
-  const c111 = hash3(ix + 1, iy + 1, iz + 1);
-
-  const x00 = c000 + (c100 - c000) * ux;
-  const x10 = c010 + (c110 - c010) * ux;
-  const x01 = c001 + (c101 - c001) * ux;
-  const x11 = c011 + (c111 - c011) * ux;
-
-  const y0 = x00 + (x10 - x00) * uy;
-  const y1 = x01 + (x11 - x01) * uy;
-  return (y0 + (y1 - y0) * uz) * 2 - 1;
-}
-
-function fbm3D(x: number, y: number, z: number): number {
-  return (
-    noise3D(x, y, z) * 0.62 +
-    noise3D(x * 2.13, y * 2.13, z * 2.13) * 0.28 +
-    noise3D(x * 4.41, y * 4.41, z * 4.41) * 0.10
-  );
-}
-
-// Bilinearly sample an equirectangular RGBA buffer (channel 0) along an arbitrary 3D unit vector
-function sampleEquirectBilinear(
-  data: Uint8ClampedArray,
+// Fast separable [0.25, 0.5, 0.25] smoothing over Float32 equirectangular buffers (removes 8-bit JPEG block chatter)
+function smoothFloatGridSeparable(
+  bufA: Float32Array,
   w: number,
   h: number,
-  vx: number,
-  vy: number,
-  vz: number
-): number {
-  const invLen = 1.0 / Math.sqrt(vx * vx + vy * vy + vz * vz);
-  const ny = Math.max(-1, Math.min(1, vy * invLen));
-  const lat = Math.asin(ny);
-  const lon = Math.atan2(-vz * invLen, vx * invLen);
+  passes: number
+): Float32Array {
+  if (passes <= 0) return bufA;
+  const bufB = new Float32Array(bufA.length);
+  for (let p = 0; p < passes; p++) {
+    for (let y = 0; y < h; y++) {
+      const row = y * w;
+      for (let x = 0; x < w; x++) {
+        const xm = x === 0 ? w - 1 : x - 1;
+        const xp = x === w - 1 ? 0 : x + 1;
+        bufB[row + x] = bufA[row + xm] * 0.25 + bufA[row + x] * 0.5 + bufA[row + xp] * 0.25;
+      }
+    }
+    for (let y = 0; y < h; y++) {
+      const ym = y === 0 ? 0 : y - 1;
+      const yp = y === h - 1 ? h - 1 : y + 1;
+      const rC = y * w;
+      const rM = ym * w;
+      const rP = yp * w;
+      for (let x = 0; x < w; x++) {
+        bufA[rC + x] = bufB[rM + x] * 0.25 + bufB[rC + x] * 0.5 + bufB[rP + x] * 0.25;
+      }
+    }
+  }
+  return bufA;
+}
 
-  let fx = (lon / (2 * Math.PI) + 0.5) * w - 0.5;
-  fx = ((fx % w) + w) % w;
-  let fy = (0.5 - lat / Math.PI) * h - 0.5;
-  if (fy < 0) fy = 0;
-  else if (fy > h - 1) fy = h - 1;
+function buildSmoothedElevationFloatGrid(
+  bumpImg: HTMLImageElement | undefined,
+  w: number,
+  h: number,
+  passes: number
+): Float32Array {
+  const n = w * h;
+  const elev = new Float32Array(n);
 
-  const x0 = Math.floor(fx);
-  const y0 = Math.floor(fy);
-  const x1 = (x0 + 1) % w;
-  const y1 = y0 < h - 1 ? y0 + 1 : y0;
-  const tx = fx - x0;
-  const ty = fy - y0;
+  if (bumpImg) {
+    const tmp = document.createElement('canvas');
+    tmp.width = w;
+    tmp.height = h;
+    const tctx = tmp.getContext('2d')!;
+    tctx.drawImage(bumpImg, 0, 0, w, h);
+    const px = tctx.getImageData(0, 0, w, h).data;
+    for (let i = 0; i < n; i++) {
+      elev[i] = px[i * 4];
+    }
+  } else {
+    for (let y = 0; y < h; y++) {
+      const lat = 90 - ((y + 0.5) / h) * 180;
+      for (let x = 0; x < w; x++) {
+        const lon = ((x + 0.5) / w) * 360 - 180;
+        const val =
+          128 +
+          Math.sin(lat * 0.25 + lon * 0.18) * 26 +
+          Math.cos(lon * 0.42 - lat * 0.31) * 18;
+        elev[y * w + x] = Math.max(0, Math.min(255, val));
+      }
+    }
+  }
 
-  const r0 = y0 * w;
-  const r1 = y1 * w;
-  const v00 = data[(r0 + x0) * 4];
-  const v10 = data[(r0 + x1) * 4];
-  const v01 = data[(r1 + x0) * 4];
-  const v11 = data[(r1 + x1) * 4];
-
-  const a = v00 + (v10 - v00) * tx;
-  const b = v01 + (v11 - v01) * tx;
-  return a + (b - a) * ty;
+  return smoothFloatGridSeparable(elev, w, h, passes);
 }
 
 // Bilinearly sample a Float32Array equirectangular grid along a 3D unit vector
@@ -295,187 +280,202 @@ function sampleTerrainGrid(
   };
 }
 
-// 1. Synthesize Unified Whole-Moon Monochrome Albedo & Spherical Tangent-Space Normal Map
-// Uses physical constant-arc spherical LOLA gradients all the way to the poles + subtly feathered polar craters.
+// 1. Synthesize 4K Photographic Monochrome Albedo (4096x2048) & Smoothed 2K Object-Space Normal Map (2048x1024)
 function paintLunarSurfaceTextures(
   monoCanvas: HTMLCanvasElement,
   monoTexture: THREE.CanvasTexture,
   normalCanvas: HTMLCanvasElement,
   normalTexture: THREE.CanvasTexture,
-  bumpCanvas: HTMLCanvasElement,
-  bumpTexture: THREE.CanvasTexture,
   lrocImg?: HTMLImageElement,
   bumpImg?: HTMLImageElement
 ) {
-  const w = SURF_TEX_W;
-  const h = SURF_TEX_H;
+  // Pass A: Full 4K (4096x2048) Crisp Monochrome LROC Albedo + |lat| > 84 deg Isotropic Polar Smoothing
+  const aw = ALBEDO_TEX_W;
+  const ah = ALBEDO_TEX_H;
   const mctx = monoCanvas.getContext('2d', { willReadFrequently: true })!;
-  const nctx = normalCanvas.getContext('2d', { willReadFrequently: true })!;
-  const bctx = bumpCanvas.getContext('2d', { willReadFrequently: true })!;
 
   if (lrocImg) {
-    mctx.drawImage(lrocImg, 0, 0, w, h);
+    mctx.drawImage(lrocImg, 0, 0, aw, ah);
+    const monoImgData = mctx.getImageData(0, 0, aw, ah);
+    const mData = monoImgData.data;
+
+    // Precompute fast 256-entry contrast curve LUT (zero Math.pow per pixel across 8.4 MP)
+    const lumLut = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) {
+      lumLut[v] = Math.min(255, Math.max(0, Math.round(Math.pow(v / 255, 1.05) * 238 + 8)));
+    }
+
+    // Clone only polar cap strips (|lat| > 84 deg) for fast isotropic cap smoothing without allocating 33 MB
+    const capRows = Math.ceil((6.5 / 180) * ah) + 2;
+    const deg2Rad = Math.PI / 180;
+    const polarBandOffset = Math.max(0, ah - capRows);
+    const southCapSrc = new Uint8ClampedArray(mData.subarray(polarBandOffset * aw * 4));
+    const northCapSrc = new Uint8ClampedArray(mData.subarray(0, capRows * aw * 4));
+
+    const totalAlbedoPx = aw * ah;
+    for (let i = 0; i < totalAlbedoPx; i++) {
+      const p4 = i * 4;
+      const luma = Math.round(0.299 * mData[p4] + 0.587 * mData[p4 + 1] + 0.114 * mData[p4 + 2]);
+      const val = lumLut[luma];
+      mData[p4] = val;
+      mData[p4 + 1] = val;
+      mData[p4 + 2] = val;
+      mData[p4 + 3] = 255;
+    }
+
+    // Isotropically blend |lat| > 84 deg rows to prevent UV converge stretching at the exact poles
+    for (let py = 0; py < ah; py++) {
+      const latDeg = 90 - ((py + 0.5) / ah) * 180;
+      const absLat = Math.abs(latDeg);
+      if (absLat <= 84) continue;
+
+      const capT = Math.min(1, (absLat - 84) / 6.0);
+      const capBlend = capT * capT * (3 - 2 * capT);
+      const latRad = latDeg * deg2Rad;
+      const sinLat = Math.sin(latRad);
+      const cosLat = Math.cos(latRad);
+      const isSouth = latDeg < 0;
+      const stripSrc = isSouth ? southCapSrc : northCapSrc;
+      const rowInStripBase = isSouth ? polarBandOffset : 0;
+      const sr = 0.015;
+
+      const sampleCap = (vx: number, vy: number, vz: number): number => {
+        const invLen = 1.0 / Math.sqrt(vx * vx + vy * vy + vz * vz);
+        const lat = Math.asin(Math.max(-1, Math.min(1, vy * invLen)));
+        const lon = Math.atan2(-vz * invLen, vx * invLen);
+        let fx = (lon / (2 * Math.PI) + 0.5) * aw - 0.5;
+        fx = ((fx % aw) + aw) % aw;
+        let fy = (0.5 - lat / Math.PI) * ah - 0.5 - rowInStripBase;
+        fy = Math.max(0, Math.min(capRows - 1, fy));
+        const x0 = Math.floor(fx);
+        const y0 = Math.floor(fy);
+        const x1 = (x0 + 1) % aw;
+        const y1 = Math.min(capRows - 1, y0 + 1);
+        const tx = fx - x0;
+        const ty = fy - y0;
+        const v00 = stripSrc[(y0 * aw + x0) * 4];
+        const v10 = stripSrc[(y0 * aw + x1) * 4];
+        const v01 = stripSrc[(y1 * aw + x0) * 4];
+        const v11 = stripSrc[(y1 * aw + x1) * 4];
+        return (v00 + (v10 - v00) * tx) * (1 - ty) + (v01 + (v11 - v01) * tx) * ty;
+      };
+
+      const rowOff = py * aw;
+      for (let px = 0; px < aw; px++) {
+        const p4 = (rowOff + px) * 4;
+        const lonRad = (((px + 0.5) / aw) * 360 - 180) * deg2Rad;
+        const sinLon = Math.sin(lonRad);
+        const cosLon = Math.cos(lonRad);
+        const vx = cosLat * cosLon;
+        const vy = sinLat;
+        const vz = -cosLat * sinLon;
+        const ex = -sinLon;
+        const ez = -cosLon;
+        const nxAxis = -sinLat * cosLon;
+        const nyAxis = cosLat;
+        const nzAxis = sinLat * sinLon;
+
+        const isoRaw =
+          (sampleCap(vx + sr * ex, vy, vz + sr * ez) +
+            sampleCap(vx - sr * ex, vy, vz - sr * ez) +
+            sampleCap(vx + sr * nxAxis, vy + sr * nyAxis, vz + sr * nzAxis) +
+            sampleCap(vx - sr * nxAxis, vy - sr * nyAxis, vz - sr * nzAxis)) *
+          0.25;
+        const isoLum = lumLut[Math.min(255, Math.max(0, Math.round(isoRaw)))];
+        const blended = Math.round(mData[p4] * (1 - capBlend) + isoLum * capBlend);
+        mData[p4] = blended;
+        mData[p4 + 1] = blended;
+        mData[p4 + 2] = blended;
+      }
+    }
+
+    mctx.putImageData(monoImgData, 0, 0);
   } else {
     mctx.fillStyle = '#8b8e94';
-    mctx.fillRect(0, 0, w, h);
+    mctx.fillRect(0, 0, aw, ah);
   }
-  const monoImgData = mctx.getImageData(0, 0, w, h);
-  const mData = monoImgData.data;
-  const lrocSrc = lrocImg ? new Uint8ClampedArray(mData) : null;
+  monoTexture.needsUpdate = true;
 
-  let lolaData: Uint8ClampedArray | null = null;
-  if (bumpImg) {
-    bctx.drawImage(bumpImg, 0, 0, w, h);
-    lolaData = bctx.getImageData(0, 0, w, h).data;
-  }
-  const bumpImgData = bctx.createImageData(w, h);
-  const bData = bumpImgData.data;
-
-  const normalImgData = nctx.createImageData(w, h);
+  // Pass B: Smoothed 2K Object-Space Normal Map (2048x1024) from Float32 De-Blocked LOLA + Polar Craters
+  const nw = NORM_TEX_W;
+  const nh = NORM_TEX_H;
+  const nctx = normalCanvas.getContext('2d', { willReadFrequently: true })!;
+  const smoothLola = bumpImg ? buildSmoothedElevationFloatGrid(bumpImg, nw, nh, 3) : null;
+  const normalImgData = nctx.createImageData(nw, nh);
   const nData = normalImgData.data;
 
   const craters = getCraterDescriptors();
   const numCraters = craters.length;
   const deg2Rad = Math.PI / 180;
-  const stepRad = 0.0035;
-  const nFreq = 22.0;
-  const noiseEps = 0.008;
+  const stepRad = 0.0042;
 
-  for (let py = 0; py < h; py++) {
-    const latDeg = 90 - ((py + 0.5) / h) * 180;
+  for (let py = 0; py < nh; py++) {
+    const latDeg = 90 - ((py + 0.5) / nh) * 180;
     const absLat = Math.abs(latDeg);
     const latRad = latDeg * deg2Rad;
     const sinLat = Math.sin(latRad);
     const cosLat = Math.cos(latRad);
 
-    // Taper LOLA only inside the extreme |lat| > 80° pole tip (down to 0.25 at |lat| = 90°)
+    // Taper LOLA only inside extreme |lat| > 80 deg pole tip
     let lolaWeight = 1.0;
     if (absLat > 80) {
       const t = Math.min(1, (absLat - 80) / 10);
       lolaWeight = 1.0 - 0.75 * (t * t * (3 - 2 * t));
     }
 
-    // Smooth cubic fade for polar crater detail (-70° = 0.0 -> -82° = 1.0)
+    // Smooth cubic fade for polar crater relief (-70° = 0.0 -> -82° = 1.0)
     let polarBlend = 0.0;
     if (latDeg < -70) {
       const pt = Math.min(1, (-70 - latDeg) / 12);
       polarBlend = pt * pt * (3 - 2 * pt);
     }
 
-    const rowOffset = py * w;
-
-    for (let px = 0; px < w; px++) {
+    const rowOffset = py * nw;
+    for (let px = 0; px < nw; px++) {
       const idx = rowOffset + px;
       const p4 = idx * 4;
-      const lonDeg = ((px + 0.5) / w) * 360 - 180;
-      const lonRad = lonDeg * deg2Rad;
+      const lonRad = (((px + 0.5) / nw) * 360 - 180) * deg2Rad;
       const sinLon = Math.sin(lonRad);
       const cosLon = Math.cos(lonRad);
 
-      // Outward spherical normal P, East tangent E, North tangent N
       const vx = cosLat * cosLon;
       const vy = sinLat;
       const vz = -cosLat * sinLon;
 
       const ex = -sinLon;
-      const ez = -cosLon; // ey = 0
+      const ez = -cosLon;
       const nxAxis = -sinLat * cosLon;
       const nyAxis = cosLat;
       const nzAxis = sinLat * sinLon;
 
-      // 1) Base LROC monochrome albedo (with isotropic spherical polar smoothing above |lat| > 83° to prevent UV spoke stretching)
-      let albedoLum: number;
-      if (lrocSrc) {
-        const lum = 0.299 * lrocSrc[p4] + 0.587 * lrocSrc[p4 + 1] + 0.114 * lrocSrc[p4 + 2];
-        let baseLum = Math.min(255, Math.max(0, Math.pow(lum / 255, 1.06) * 235 + 10));
-        if (absLat > 83) {
-          const capT = Math.min(1, (absLat - 83) / 6.5);
-          const capBlend = capT * capT * (3 - 2 * capT);
-          const sr = 0.016;
-          const isoRaw =
-            (sampleEquirectBilinear(lrocSrc, w, h, vx + sr * ex, vy, vz + sr * ez) +
-              sampleEquirectBilinear(lrocSrc, w, h, vx - sr * ex, vy, vz - sr * ez) +
-              sampleEquirectBilinear(lrocSrc, w, h, vx + sr * nxAxis, vy + sr * nyAxis, vz + sr * nzAxis) +
-              sampleEquirectBilinear(lrocSrc, w, h, vx - sr * nxAxis, vy - sr * nyAxis, vz - sr * nzAxis)) *
-            0.25;
-          const isoLum = Math.min(255, Math.max(0, Math.pow(isoRaw / 255, 1.06) * 235 + 10));
-          baseLum = baseLum * (1 - capBlend) + isoLum * capBlend;
-        }
-        albedoLum = baseLum;
-      } else {
-        albedoLum = 138 + fbm3D(vx * 5, vy * 5, vz * 5) * 16;
-      }
-
-      // 2) Spherical tangent-step LOLA elevation & normal derivatives (zero mid-latitude/polar discontinuity)
-      let heightNorm = 0;
       let dH_dEast = 0;
       let dH_dNorth = 0;
 
-      if (lolaData) {
-        const eC = lolaData[p4];
-        const eE_plus = sampleEquirectBilinear(lolaData, w, h, vx + stepRad * ex, vy, vz + stepRad * ez);
-        const eE_minus = sampleEquirectBilinear(lolaData, w, h, vx - stepRad * ex, vy, vz - stepRad * ez);
-        const eN_plus = sampleEquirectBilinear(
-          lolaData,
-          w,
-          h,
+      if (smoothLola) {
+        const eE_plus = sampleFloatEquirectBilinear(smoothLola, nw, nh, vx + stepRad * ex, vy, vz + stepRad * ez);
+        const eE_minus = sampleFloatEquirectBilinear(smoothLola, nw, nh, vx - stepRad * ex, vy, vz - stepRad * ez);
+        const eN_plus = sampleFloatEquirectBilinear(
+          smoothLola,
+          nw,
+          nh,
           vx + stepRad * nxAxis,
           vy + stepRad * nyAxis,
           vz + stepRad * nzAxis
         );
-        const eN_minus = sampleEquirectBilinear(
-          lolaData,
-          w,
-          h,
+        const eN_minus = sampleFloatEquirectBilinear(
+          smoothLola,
+          nw,
+          nh,
           vx - stepRad * nxAxis,
           vy - stepRad * nyAxis,
           vz - stepRad * nzAxis
         );
 
-        heightNorm += (eC / 255 - 0.5) * 0.45 * lolaWeight;
-        dH_dEast += ((eE_plus - eE_minus) / 255) * 2.65 * lolaWeight;
-        dH_dNorth += ((eN_plus - eN_minus) / 255) * 2.65 * lolaWeight;
+        dH_dEast += ((eE_plus - eE_minus) / 255) * 1.95 * lolaWeight;
+        dH_dNorth += ((eN_plus - eN_minus) / 255) * 1.95 * lolaWeight;
       }
 
-      // 3) Multi-scale isotropic 3D micro-regolith grain & fine craterlet normal relief across (-90°..+90°)
-      const px0 = vx * nFreq;
-      const py0 = vy * nFreq;
-      const pz0 = vz * nFreq;
-      const nE =
-        fbm3D(px0 + ex * noiseEps * nFreq, py0, pz0 + ez * noiseEps * nFreq) -
-        fbm3D(px0 - ex * noiseEps * nFreq, py0, pz0 - ez * noiseEps * nFreq);
-      const nN =
-        fbm3D(px0 + nxAxis * noiseEps * nFreq, py0 + nyAxis * noiseEps * nFreq, pz0 + nzAxis * noiseEps * nFreq) -
-        fbm3D(px0 - nxAxis * noiseEps * nFreq, py0 - nyAxis * noiseEps * nFreq, pz0 - nzAxis * noiseEps * nFreq);
-      dH_dEast += (nE / (2 * noiseEps * nFreq)) * 0.038;
-      dH_dNorth += (nN / (2 * noiseEps * nFreq)) * 0.038;
-
-      const nFreqFine = 64.0;
-      const noiseEpsFine = 0.004;
-      const fx0 = vx * nFreqFine;
-      const fy0 = vy * nFreqFine;
-      const fz0 = vz * nFreqFine;
-      const nfE =
-        noise3D(fx0 + ex * noiseEpsFine * nFreqFine, fy0, fz0 + ez * noiseEpsFine * nFreqFine) -
-        noise3D(fx0 - ex * noiseEpsFine * nFreqFine, fy0, fz0 - ez * noiseEpsFine * nFreqFine);
-      const nfN =
-        noise3D(
-          fx0 + nxAxis * noiseEpsFine * nFreqFine,
-          fy0 + nyAxis * noiseEpsFine * nFreqFine,
-          fz0 + nzAxis * noiseEpsFine * nFreqFine
-        ) -
-        noise3D(
-          fx0 - nxAxis * noiseEpsFine * nFreqFine,
-          fy0 - nyAxis * noiseEpsFine * nFreqFine,
-          fz0 - nzAxis * noiseEpsFine * nFreqFine
-        );
-      dH_dEast += (nfE / (2 * noiseEpsFine * nFreqFine)) * 0.028;
-      dH_dNorth += (nfN / (2 * noiseEpsFine * nFreqFine)) * 0.028;
-      albedoLum += noise3D(fx0, fy0, fz0) * 3.5;
-
-      // 4) Smoothly feathered South Pole crater relief matching LOLA texture character & contrast
       if (polarBlend > 0.002) {
-        let craterH = 0;
         for (let ci = 0; ci < numCraters; ci++) {
           const c = craters[ci];
           const dot = vx * c.cx + vy * c.cy + vz * c.cz;
@@ -490,21 +490,17 @@ function paintLunarSurfaceTextures(
           if (rNorm < 1.0) {
             const floorR = c.floorRatio;
             if (rNorm <= floorR) {
-              craterH += -c.depthNorm + c.rimNorm * Math.pow(rNorm, 3.0);
               dfDrNorm = 3.0 * c.rimNorm * rNorm * rNorm;
             } else {
               const span = Math.max(0.05, 1.0 - floorR);
               const u = (rNorm - floorR) / span;
-              const smooth = u * u * (3 - 2 * u);
               const dSmooth = (6 * u * (1 - u)) / span;
-              craterH += -c.depthNorm * (1.0 - smooth) + c.rimNorm * Math.pow(rNorm, 3.0);
               dfDrNorm = c.depthNorm * dSmooth + 3.0 * c.rimNorm * rNorm * rNorm;
             }
           } else {
             const t = (rNorm - 1.0) / 0.48;
             if (t < 1.0) {
               const apron = 1.0 - t;
-              craterH += c.rimNorm * apron * apron;
               dfDrNorm = -(2.0 * c.rimNorm * apron) / 0.48;
             }
           }
@@ -517,28 +513,9 @@ function paintLunarSurfaceTextures(
             dH_dNorth += factor * -cDotN;
           }
         }
-
-        const clampedShade = Math.max(-0.04, Math.min(0.04, craterH * 0.08)) * polarBlend;
-        albedoLum *= 1.0 + clampedShade;
-        heightNorm += craterH * 0.25 * polarBlend;
       }
 
-      // Write monochrome albedo
-      const finalAlbedo = Math.min(255, Math.max(0, Math.round(albedoLum)));
-      mData[p4] = finalAlbedo;
-      mData[p4 + 1] = finalAlbedo;
-      mData[p4 + 2] = finalAlbedo;
-      mData[p4 + 3] = 255;
-
-      // Write combined bump grayscale
-      const finalBump = Math.min(255, Math.max(0, Math.round(128 + heightNorm * 110)));
-      bData[p4] = finalBump;
-      bData[p4 + 1] = finalBump;
-      bData[p4 + 2] = finalBump;
-      bData[p4 + 3] = 255;
-
-      // Encode true 3D Object-Space surface normal: normalize(P - (dH_dE * E + dH_dN * N))
-      // Eliminates tangent-space dFdx(vUv) UV singularity & radial starburst spikes at -90°/+90° poles
+      // True 3D Object-Space surface normal: normalize(P - (dH_dE * E + dH_dN * N))
       const nxObj = vx - (dH_dEast * ex + dH_dNorth * nxAxis);
       const nyObj = vy - dH_dNorth * nyAxis;
       const nzObj = vz - (dH_dEast * ez + dH_dNorth * nzAxis);
@@ -550,46 +527,17 @@ function paintLunarSurfaceTextures(
     }
   }
 
-  mctx.putImageData(monoImgData, 0, 0);
-  bctx.putImageData(bumpImgData, 0, 0);
   nctx.putImageData(normalImgData, 0, 0);
-
-  monoTexture.needsUpdate = true;
-  bumpTexture.needsUpdate = true;
   normalTexture.needsUpdate = true;
 }
 
-// 2. Build 512x256 seamless terrain grid using spherical tangent-step gradients & tight canonical site anchors
+// 2. Build 1024x512 seamless terrain grid using smoothed Float32 elevation & tight canonical site anchors
 function buildTerrainGrid(presetSites: CandidateSite[], bumpImg?: HTMLImageElement): TerrainGrid {
   const w = GRID_W;
   const h = GRID_H;
   const n = w * h;
 
-  const elev = new Float32Array(n);
-
-  if (bumpImg) {
-    const tmp = document.createElement('canvas');
-    tmp.width = w;
-    tmp.height = h;
-    const tctx = tmp.getContext('2d')!;
-    tctx.drawImage(bumpImg, 0, 0, w, h);
-    const px = tctx.getImageData(0, 0, w, h).data;
-    for (let i = 0; i < n; i++) {
-      elev[i] = px[i * 4];
-    }
-  } else {
-    for (let y = 0; y < h; y++) {
-      const lat = 90 - ((y + 0.5) / h) * 180;
-      for (let x = 0; x < w; x++) {
-        const lon = ((x + 0.5) / w) * 360 - 180;
-        const val =
-          128 +
-          Math.sin(lat * 0.25 + lon * 0.18) * 26 +
-          Math.cos(lon * 0.42 - lat * 0.31) * 18;
-        elev[y * w + x] = Math.max(0, Math.min(255, val));
-      }
-    }
-  }
+  const elev = buildSmoothedElevationFloatGrid(bumpImg, w, h, 3);
 
   const slopeDeg = new Float32Array(n);
   const elevM = new Float32Array(n);
@@ -601,7 +549,7 @@ function buildTerrainGrid(presetSites: CandidateSite[], bumpImg?: HTMLImageEleme
   const nz = new Float32Array(n);
 
   const deg2Rad = Math.PI / 180;
-  const stepRad = 0.012;
+  const stepRad = 0.010;
 
   for (let y = 0; y < h; y++) {
     const lat = 90 - ((y + 0.5) / h) * 180;
@@ -665,10 +613,8 @@ function buildTerrainGrid(presetSites: CandidateSite[], bumpImg?: HTMLImageEleme
       const dx = (eE_plus - eE_minus) * 0.5 * lolaWeight;
       const dy = (eN_plus - eN_minus) * 0.5 * lolaWeight;
       const grad = Math.sqrt(dx * dx + dy * dy);
-      const localMean = (eE_plus + eE_minus + eN_plus + eN_minus) * 0.25;
-      const laplacian = Math.abs(eC - localMean) * lolaWeight;
 
-      const baseSlope = 1.6 + grad * 0.48;
+      const baseSlope = 1.4 + grad * 0.48;
       const craterSample = lat < -68 ? sampleCraterField(lat, lon) : null;
 
       slopeDeg[idx] = craterSample
@@ -682,19 +628,18 @@ function buildTerrainGrid(presetSites: CandidateSite[], bumpImg?: HTMLImageEleme
       const polarElevM = craterSample ? craterSample.heightNorm * 4200 * polarBlend : 0;
       elevM[idx] = Math.round(lolaElevM + polarElevM);
 
-      roughnessCode[idx] =
-        slopeDeg[idx] >= 13.5 || laplacian > 7.5 || grad > 22
-          ? 2
-          : slopeDeg[idx] >= 6.5 || laplacian > 3.2 || grad > 11
-            ? 1
-            : 0;
+      // Clean gradient-based roughness without high-frequency Laplacian speckles
+      roughnessCode[idx] = slopeDeg[idx] >= 13.5 || grad > 22 ? 2 : slopeDeg[idx] >= 6.8 || grad > 11 ? 1 : 0;
 
       horizonCutoffDeg[idx] = craterSample ? craterSample.horizonCutoffDeg : 0;
       earthCutoffDeg[idx] = craterSample ? Math.max(-1.8, craterSample.horizonCutoffDeg * 0.85) : 0;
     }
   }
 
-  // Tight local Gaussian anchors (sigma = 0.9°) ONLY for canonical sites so no giant polar blotches appear
+  // Smooth slope contours cleanly before applying canonical site anchors
+  smoothFloatGridSeparable(slopeDeg, w, h, 1);
+
+  // Tight local Gaussian anchors (sigma = 0.9 deg) ONLY for canonical sites so no giant polar blotches appear
   const canonicalSites = presetSites.filter((s) => !s.id.startsWith('custom'));
   for (const site of canonicalSites) {
     const sLat = site.coordinates.latitude;
@@ -763,7 +708,7 @@ function buildTerrainGrid(presetSites: CandidateSite[], bumpImg?: HTMLImageEleme
   };
 }
 
-// 3. Paint dynamic RYG landing assessment synced with 3D sun shadows + smoothed polar DTE horizon
+// 3. Paint anti-aliased dynamic RYG assessment overlay (1024x512) synced with ephemeris & terrain constraints
 function paintDynamicOverlayTexture(
   grid: TerrainGrid,
   canvas: HTMLCanvasElement,
@@ -789,7 +734,7 @@ function paintDynamicOverlayTexture(
   const data = imgData.data;
 
   const maxSlope = lander ? lander.maxSlopeDeg : 15.0;
-  const cautionSlope = lander ? lander.maxSlopeDeg * 0.75 : 5.0;
+  const cautionSlope = lander ? lander.maxSlopeDeg * 0.72 : 5.0;
   const minIllum = lander ? lander.minIlluminationPct : 70;
   const criticalIllum = lander ? lander.minIlluminationPct * 0.5 : 30;
   const requiresLos = lander ? lander.requiresEarthLos : true;
@@ -799,6 +744,11 @@ function paintDynamicOverlayTexture(
   const { sunVec } = getSubsolarPoint(sunOffsetDays);
   const { sunVec: earthVec } = getEarthPoint(sunOffsetDays);
   const rad2Deg = 180 / Math.PI;
+
+  const smooth01 = (t: number) => {
+    const c = Math.max(0, Math.min(1, t));
+    return c * c * (3 - 2 * c);
+  };
 
   const total = width * height;
   for (let i = 0; i < total; i++) {
@@ -816,66 +766,53 @@ function paintDynamicOverlayTexture(
     const s = slopeDeg[i];
     const r = roughnessCode[i];
 
-    let isRed = false;
-    let isYellow = false;
+    // Smooth continuous [0..2] risk score (0 = GO Green, 1 = Caution Amber, 2 = NO-GO Crimson)
+    const slopeWarn = smooth01((s - cautionSlope * 0.88) / Math.max(0.4, cautionSlope * 0.24));
+    const slopeCrit = smooth01((s - maxSlope * 0.90) / Math.max(0.4, maxSlope * 0.20));
+    const slopeRisk = slopeWarn + slopeCrit;
 
-    // 1. Slope check
-    if (s > maxSlope) isRed = true;
-    else if (s >= cautionSlope) isYellow = true;
+    const illumWarn = smooth01((minIllum * 1.08 - ill) / Math.max(4, minIllum * 0.16));
+    const illumCrit = smooth01((criticalIllum * 1.12 - ill) / Math.max(4, criticalIllum * 0.24));
+    const illumRisk = illumWarn + illumCrit;
 
-    // 2. Solar Illumination / 3D Shadow Terminator check
-    if (!isRed) {
-      if (ill < criticalIllum) isRed = true;
-      else if (ill < minIllum) isYellow = true;
+    let roughRisk = 0;
+    if (lander) {
+      if (r === 2) roughRisk = maxRoughCode === 2 ? 1.0 : 2.0;
+      else if (r === 1 && maxRoughCode === 0) roughRisk = 1.0;
+    } else {
+      roughRisk = r === 2 ? 2.0 : r === 1 ? 1.0 : 0.0;
     }
 
-    // 3. Roughness check
-    if (!isRed) {
-      if (lander) {
-        if (r === 2) {
-          if (maxRoughCode === 2) isYellow = true;
-          else isRed = true;
-        } else if (r === 1 && maxRoughCode === 0) {
-          isYellow = true;
-        }
-      } else {
-        if (r === 2) isRed = true;
-        else if (r === 1) isYellow = true;
-      }
-    }
+    const dteWarn = smooth01((-1.8 - effectiveEarthElev) / 1.8);
+    const dteCrit = requiresLos ? smooth01((-5.8 - effectiveEarthElev) / 2.2) : 0;
+    const dteRisk = dteWarn + dteCrit;
 
-    // 4. Smoothed Direct-to-Earth (DTE) LOS limb transition (-1.8° full grazing OK, -6.5°..-1.8° caution)
-    if (!isRed) {
-      if (effectiveEarthElev < -6.5) {
-        if (requiresLos) isRed = true;
-        else isYellow = true;
-      } else if (effectiveEarthElev < -1.8) {
-        isYellow = true;
-      }
+    const riskScore = Math.min(2.0, Math.max(slopeRisk, illumRisk, roughRisk, dteRisk));
+
+    let cr: number;
+    let cg: number;
+    let cb: number;
+    if (riskScore <= 1.0) {
+      cr = 16 + (245 - 16) * riskScore;
+      cg = 185 + (158 - 185) * riskScore;
+      cb = 129 + (11 - 129) * riskScore;
+    } else {
+      const t = riskScore - 1.0;
+      cr = 245 + (239 - 245) * t;
+      cg = 158 + (68 - 158) * t;
+      cb = 11 + (68 - 11) * t;
     }
 
     const reliefAlpha = Math.max(
-      175,
-      Math.min(215, Math.round(182 + (ill / 100) * 18 + Math.min(15, s * 0.9)))
+      155,
+      Math.min(205, Math.round(164 + (ill / 100) * 18 + Math.min(18, s * 0.95)))
     );
 
     const p = i * 4;
-    if (isRed) {
-      data[p] = 239;
-      data[p + 1] = 68;
-      data[p + 2] = 68;
-      data[p + 3] = reliefAlpha;
-    } else if (isYellow) {
-      data[p] = 245;
-      data[p + 1] = 158;
-      data[p + 2] = 11;
-      data[p + 3] = reliefAlpha;
-    } else {
-      data[p] = 16;
-      data[p + 1] = 185;
-      data[p + 2] = 129;
-      data[p + 3] = Math.max(175, reliefAlpha - 6);
-    }
+    data[p] = Math.round(cr);
+    data[p + 1] = Math.round(cg);
+    data[p + 2] = Math.round(cb);
+    data[p + 3] = reliefAlpha;
   }
 
   ctx.putImageData(imgData, 0, 0);
@@ -896,7 +833,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [showAssessmentOverlay, setShowAssessmentOverlay] = useState<boolean>(true);
-  const [overlayOpacity, setOverlayOpacity] = useState<number>(55);
+  const [overlayOpacity, setOverlayOpacity] = useState<number>(42);
   const [autoRotate, setAutoRotate] = useState<boolean>(false);
   const [isZoomedIn, setIsZoomedIn] = useState<boolean>(false);
   const [isLowOrbit, setIsLowOrbit] = useState<boolean>(false);
@@ -1142,9 +1079,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(width, height);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.5));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.2;
+    const maxAniso = renderer.capabilities.getMaxAnisotropy();
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
@@ -1196,28 +1134,22 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 
     // 1. Unified Monochrome Lunar Base Sphere (LROC + Spherical Tangent LOLA + Feathered Polar Craters)
     const monoCanvas = document.createElement('canvas');
-    monoCanvas.width = SURF_TEX_W;
-    monoCanvas.height = SURF_TEX_H;
+    monoCanvas.width = ALBEDO_TEX_W;
+    monoCanvas.height = ALBEDO_TEX_H;
     const monoTexture = new THREE.CanvasTexture(monoCanvas);
     monoTexture.wrapS = THREE.RepeatWrapping;
     monoTexture.wrapT = THREE.ClampToEdgeWrapping;
+    monoTexture.anisotropy = maxAniso;
 
     const normalCanvas = document.createElement('canvas');
-    normalCanvas.width = SURF_TEX_W;
-    normalCanvas.height = SURF_TEX_H;
+    normalCanvas.width = NORM_TEX_W;
+    normalCanvas.height = NORM_TEX_H;
     const normalTexture = new THREE.CanvasTexture(normalCanvas);
     normalTexture.wrapS = THREE.RepeatWrapping;
     normalTexture.wrapT = THREE.ClampToEdgeWrapping;
     normalTexture.generateMipmaps = false;
     normalTexture.minFilter = THREE.LinearFilter;
     normalTexture.magFilter = THREE.LinearFilter;
-
-    const bumpCanvas = document.createElement('canvas');
-    bumpCanvas.width = SURF_TEX_W;
-    bumpCanvas.height = SURF_TEX_H;
-    const bumpTexture = new THREE.CanvasTexture(bumpCanvas);
-    bumpTexture.wrapS = THREE.RepeatWrapping;
-    bumpTexture.wrapT = THREE.ClampToEdgeWrapping;
 
     let loadedLrocImg: HTMLImageElement | undefined;
     let loadedBumpImg: HTMLImageElement | undefined;
@@ -1227,12 +1159,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       monoCanvas,
       monoTexture,
       normalCanvas,
-      normalTexture,
-      bumpCanvas,
-      bumpTexture
+      normalTexture
     );
 
-    const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 192, 192);
+    const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 256, 256);
     const moonMaterial = new THREE.MeshStandardMaterial({
       map: monoTexture,
       normalMap: normalTexture,
@@ -1255,9 +1185,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     overlayTexture.wrapT = THREE.ClampToEdgeWrapping;
     overlayTexture.minFilter = THREE.LinearFilter;
     overlayTexture.magFilter = THREE.LinearFilter;
+    overlayTexture.anisotropy = maxAniso;
     overlayTextureRef.current = overlayTexture;
 
-    const overlayGeo = new THREE.SphereGeometry(MOON_RADIUS * 1.002, 192, 192);
+    const overlayGeo = new THREE.SphereGeometry(MOON_RADIUS * 1.002, 256, 256);
     const overlayMat = new THREE.MeshLambertMaterial({
       map: overlayTexture,
       transparent: true,
@@ -1291,8 +1222,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         monoTexture,
         normalCanvas,
         normalTexture,
-        bumpCanvas,
-        bumpTexture,
         loadedLrocImg,
         loadedBumpImg
       );
@@ -1316,8 +1245,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         monoTexture,
         normalCanvas,
         normalTexture,
-        bumpCanvas,
-        bumpTexture,
         loadedLrocImg,
         loadedBumpImg
       );
@@ -1749,7 +1676,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       }
       monoTexture.dispose();
       normalTexture.dispose();
-      bumpTexture.dispose();
       overlayTexture.dispose();
       renderer.dispose();
       container.innerHTML = '';

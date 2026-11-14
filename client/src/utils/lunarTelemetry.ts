@@ -358,7 +358,7 @@ export function getSouthPoleCraters(): SouthPoleCrater[] {
     { name: 'Hale Crater', lat: -74.10, lon: 90.8, radiusDeg: 1.24, depthNorm: 0.50, rimNorm: 0.14, floorRadiusRatio: 0.52 },
   ];
 
-  // Fine-scale natural polar craterlet distribution (-72° to -89.5°) matching mid-latitude LROC/LOLA texture scale
+  // Clean, well-spaced polar craterlet distribution (-72° to -89.5°) without noisy overlapping pockmarks
   const procedural: SouthPoleCrater[] = [];
   let seed = 133791;
   const nextRand = () => {
@@ -368,15 +368,15 @@ export function getSouthPoleCraters(): SouthPoleCrater[] {
 
   const sinMin = Math.sin((-72 * Math.PI) / 180);
   const sinMax = Math.sin((-89.5 * Math.PI) / 180);
-  for (let i = 0; i < 220; i++) {
+  for (let i = 0; i < 45; i++) {
     const u = nextRand();
     const sinLat = sinMin + u * (sinMax - sinMin);
     const lat = (Math.asin(sinLat) * 180) / Math.PI;
     const lon = nextRand() * 360 - 180;
     const sizeRoll = nextRand();
-    const radiusDeg = 0.12 + Math.pow(sizeRoll, 2.3) * 0.53;
-    const depthNorm = 0.18 + sizeRoll * 0.20;
-    const rimNorm = depthNorm * (0.28 + nextRand() * 0.08);
+    const radiusDeg = 0.16 + Math.pow(sizeRoll, 2.2) * 0.38;
+    const depthNorm = 0.10 + sizeRoll * 0.12;
+    const rimNorm = depthNorm * 0.22;
     procedural.push({
       name: '',
       lat,
@@ -384,7 +384,7 @@ export function getSouthPoleCraters(): SouthPoleCrater[] {
       radiusDeg,
       depthNorm,
       rimNorm,
-      floorRadiusRatio: 0.32 + sizeRoll * 0.20,
+      floorRadiusRatio: 0.36 + sizeRoll * 0.18,
     });
   }
 
