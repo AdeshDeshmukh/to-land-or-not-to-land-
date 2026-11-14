@@ -93,14 +93,49 @@ export default function App() {
       {/* Background Starfield */}
       <Starfield />
 
-      {/* Centralized Clean Header */}
-      <header className="border-b border-slate-800/80 bg-space-950/80 backdrop-blur-md px-6 py-3 flex flex-col items-center justify-center relative z-30 shrink-0">
-        <h1 className="text-xl font-bold tracking-tight text-white text-center">
-          To Land or Not to Land
-        </h1>
-        <p className="text-xs text-slate-400 text-center mt-0.5">
-          Lunar Landing Site Risk Assessment & Decision Support
-        </p>
+      {/* Centralized Clean Header with Integrated Drawer Toggles */}
+      <header className="border-b border-slate-800/80 bg-space-950/90 backdrop-blur-md px-5 py-2.5 flex items-center justify-between relative z-40 shrink-0">
+        {/* Left Drawer Trigger */}
+        <button
+          onClick={() => setIsLeftDrawerOpen(prev => !prev)}
+          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg font-mono text-xs font-semibold border transition-all ${
+            isLeftDrawerOpen
+              ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.2)]'
+              : 'bg-space-900/80 text-slate-300 border-slate-700 hover:bg-space-800 hover:text-white'
+          }`}
+          title="Toggle Mission Inputs & Landing Parameters"
+        >
+          <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="hidden sm:inline">Inputs & Parameters</span>
+          <span className="sm:hidden">Inputs</span>
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
+        </button>
+
+        {/* Centralized Header Title */}
+        <div className="text-center px-4">
+          <h1 className="text-lg md:text-xl font-bold tracking-tight text-white leading-tight">
+            To Land or Not to Land
+          </h1>
+          <p className="text-[11px] md:text-xs text-slate-400 leading-tight mt-0.5">
+            Lunar Landing Site Risk Assessment & Decision Support
+          </p>
+        </div>
+
+        {/* Right Drawer Trigger */}
+        <button
+          onClick={() => setIsRightDrawerOpen(prev => !prev)}
+          className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg font-mono text-xs font-semibold border transition-all ${
+            isRightDrawerOpen
+              ? 'bg-space-900 text-white border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.2)]'
+              : 'bg-space-900/80 text-slate-300 border-slate-700 hover:bg-space-800 hover:text-white'
+          }`}
+          title="Toggle Risk Assessment & Telemetry Analysis"
+        >
+          <BarChart3 className="w-3.5 h-3.5 text-cyan-400" />
+          <span className="hidden sm:inline">Assessment & Telemetry</span>
+          <span className="sm:hidden">Telemetry</span>
+          {getStatusBadge(assessment.overall_status)}
+        </button>
       </header>
 
       {/* Main Interactive Stage with Centered 3D Lunar Globe */}
@@ -119,40 +154,6 @@ export default function App() {
             sunIlluminationOffset={simulatedDateOffset}
             lander={landingParams}
           />
-        </div>
-
-        {/* Floating Toggle Buttons on Viewport */}
-        
-        {/* Left Floating Trigger: Inputs & Controls */}
-        <div className="absolute top-4 left-4 z-20">
-          <button
-            onClick={() => setIsLeftDrawerOpen(prev => !prev)}
-            className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl font-mono text-xs font-semibold backdrop-blur-xl border transition-all shadow-2xl ${
-              isLeftDrawerOpen
-                ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/50 shadow-[0_0_20px_rgba(6,182,212,0.25)]'
-                : 'bg-space-900/80 text-slate-200 border-slate-700/80 hover:bg-space-900 hover:border-slate-600 hover:text-white'
-            }`}
-          >
-            <Sliders className="w-4 h-4 text-cyan-400" />
-            <span>Inputs & Parameters</span>
-            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse"></span>
-          </button>
-        </div>
-
-        {/* Right Floating Trigger: Outputs & Analysis */}
-        <div className="absolute top-4 right-4 z-20">
-          <button
-            onClick={() => setIsRightDrawerOpen(prev => !prev)}
-            className={`flex items-center gap-2.5 px-4 py-2.5 rounded-xl font-mono text-xs font-semibold backdrop-blur-xl border transition-all shadow-2xl ${
-              isRightDrawerOpen
-                ? 'bg-space-900 text-white border-cyan-500/50 shadow-[0_0_20px_rgba(6,182,212,0.25)]'
-                : 'bg-space-900/80 text-slate-200 border-slate-700/80 hover:bg-space-900 hover:border-slate-600 hover:text-white'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4 text-cyan-400" />
-            <span>Assessment & Telemetry</span>
-            {getStatusBadge(assessment.overall_status)}
-          </button>
         </div>
 
         {/* ========================================================= */}

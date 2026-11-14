@@ -35,6 +35,176 @@ function latLonToVector3(lat: number, lon: number, radius: number): THREE.Vector
   return new THREE.Vector3(x, y, z);
 }
 
+// Generate photorealistic procedural Moon surface base (craters, maria, regolith, polar rings)
+function drawLunarBase(ctx: CanvasRenderingContext2D, width: number, height: number, bumpMode = false) {
+  // 1. Base Regolith
+  if (bumpMode) {
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, width, height);
+  } else {
+    ctx.fillStyle = '#64748b';
+    ctx.fillRect(0, 0, width, height);
+
+    // Regolith micro-noise
+    const imgData = ctx.getImageData(0, 0, width, height);
+    const data = imgData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      const noise = (Math.random() - 0.5) * 32;
+      const baseVal = Math.max(0, Math.min(255, 110 + noise));
+      data[i] = baseVal;
+      data[i + 1] = baseVal;
+      data[i + 2] = baseVal + 2;
+      data[i + 3] = 255;
+    }
+    ctx.putImageData(imgData, 0, 0);
+  }
+
+  // 2. Major Lunar Maria (Dark Basaltic Plains)
+  const maria = [
+    { x: 780, y: 340, rx: 240, ry: 190, dark: 0.42 }, // Oceanus Procellarum
+    { x: 1080, y: 390, rx: 110, ry: 90, dark: 0.46 },  // Mare Tranquillitatis
+    { x: 1040, y: 310, rx: 100, ry: 80, dark: 0.44 },  // Mare Serenitatis
+    { x: 1240, y: 370, rx: 70, ry: 60, dark: 0.48 },   // Mare Crisium
+    { x: 920, y: 460, rx: 120, ry: 90, dark: 0.38 },   // Mare Nubium
+    { x: 1024, y: 880, rx: 290, ry: 110, dark: 0.58 }, // South Pole - Aitken Basin
+  ];
+
+  maria.forEach(m => {
+    const grad = ctx.createRadialGradient(m.x, m.y, 10, m.x, m.y, Math.max(m.rx, m.ry));
+    if (bumpMode) {
+      grad.addColorStop(0, 'rgba(60, 60, 60, 0.4)');
+      grad.addColorStop(1, 'rgba(128, 128, 128, 0)');
+    } else {
+      grad.addColorStop(0, `rgba(15, 23, 42, ${m.dark})`);
+      grad.addColorStop(0.7, `rgba(30, 41, 59, ${m.dark * 0.6})`);
+      grad.addColorStop(1, 'rgba(51, 65, 85, 0)');
+    }
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(m.x, m.y, m.rx, m.ry, 0, 0, Math.PI * 2);
+    ctx.fill();
+  });
+
+  // 3. Dense Procedural Impact Craters across Globe (especially South Pole Highlands)
+  // Deterministic seed for reproducible lunar crater distribution
+  let seed = 42;
+  const pseudoRandom = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+
+  // Generate ~160 background craters of varying sizes
+  for (let i = 0; i < 160; i++) {
+    const cx = pseudoRandom() * width;
+    // Bias crater density toward the South Pole (y > 600)
+    const bias = pseudoRandom();
+    const cy = bias > 0.45 ? 600 + pseudoRandom() * (height - 600) : pseudoRandom() * 600;
+    const r = 3 + Math.pow(pseudoRandom(), 2) * 22;
+
+    // Crater floor (depression)
+    ctx.fillStyle = bumpMode ? 'rgba(30, 30, 30, 0.65)' : 'rgba(15, 23, 42, 0.55)';
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Crater rim (raised crest)
+    ctx.strokeStyle = bumpMode ? 'rgba(255, 255, 255, 0.85)' : 'rgba(241, 245, 249, 0.70)';
+    ctx.lineWidth = Math.max(1, r * 0.18);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Subtle shadow crescent inside crater
+    ctx.fillStyle = bumpMode ? 'rgba(10, 10, 10, 0.5)' : 'rgba(2, 6, 23, 0.6)';
+    ctx.beginPath();
+    ctx.arc(cx + r * 0.25, cy + r * 0.2, r * 0.65, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 4. Prominent Landmark Lunar Craters
+  const majorCraters = [
+    { x: 980, y: 650, r: 28, rays: true },   // Tycho
+    { x: 820, y: 430, r: 24, rays: true },   // Copernicus
+    { x: 740, y: 390, r: 20, rays: false },  // Kepler
+    // South Pole Artemis interest craters
+    { x: 1024, y: 994, r: 30, rays: true },  // Shackleton Crater (South Pole)
+    { x: 1060, y: 960, r: 24, rays: false }, // Malapert Mountain area
+    { x: 1180, y: 970, r: 26, rays: false }, // Nobile Crater
+    { x: 920, y: 980, r: 22, rays: false },  // Connecting Ridge area
+    { x: 970, y: 965, r: 20, rays: false },  // de Gerlache Crater
+    { x: 1080, y: 990, r: 21, rays: false }, // Faustini Crater
+    { x: 1120, y: 940, r: 25, rays: false }, // Amundsen Crater
+    { x: 990, y: 940, r: 18, rays: false },  // Shoemaker Crater
+  ];
+
+  majorCraters.forEach(c => {
+    // Crater floor
+    ctx.fillStyle = bumpMode ? 'rgba(20, 20, 20, 0.8)' : 'rgba(15, 23, 42, 0.75)';
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Crater bright raised rim
+    ctx.strokeStyle = bumpMode ? 'rgba(255, 255, 255, 0.95)' : 'rgba(248, 250, 252, 0.90)';
+    ctx.lineWidth = Math.max(1.8, c.r * 0.16);
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Central peak for large impact structures
+    if (c.r > 20) {
+      ctx.fillStyle = bumpMode ? 'rgba(255, 255, 255, 0.8)' : 'rgba(241, 245, 249, 0.75)';
+      ctx.beginPath();
+      ctx.arc(c.x, c.y, c.r * 0.18, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Ejecta rays
+    if (c.rays && !bumpMode) {
+      ctx.strokeStyle = 'rgba(248, 250, 252, 0.35)';
+      ctx.lineWidth = 1.4;
+      for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
+        ctx.beginPath();
+        ctx.moveTo(c.x, c.y);
+        ctx.lineTo(
+          c.x + Math.cos(angle) * (c.r * 6 + pseudoRandom() * 50),
+          c.y + Math.sin(angle) * (c.r * 6 + pseudoRandom() * 50)
+        );
+        ctx.stroke();
+      }
+    }
+  });
+
+  // 5. NASA MoonTrek-style Polar Grid Circles (80°S, 85°S, and meridian lines)
+  if (!bumpMode) {
+    ctx.save();
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.35)'; // Amber/gold cartographic grid
+    ctx.lineWidth = 1.2;
+    ctx.setLineDash([6, 6]);
+
+    // Concentric latitude rings around South Pole
+    const southPoleY = 1000;
+    const southPoleX = 1024;
+    [40, 85, 140].forEach(radius => {
+      ctx.beginPath();
+      ctx.ellipse(southPoleX, southPoleY, radius * 1.8, radius, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    });
+
+    // Radial meridians converging to pole
+    for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 4) {
+      ctx.beginPath();
+      ctx.moveTo(southPoleX, southPoleY);
+      ctx.lineTo(
+        southPoleX + Math.cos(angle) * 260,
+        southPoleY + Math.sin(angle) * 160
+      );
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
 // Generate photorealistic procedural Moon surface texture
 function createLunarTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
@@ -42,85 +212,7 @@ function createLunarTexture(): THREE.CanvasTexture {
   canvas.height = 1024;
   const ctx = canvas.getContext('2d')!;
 
-  // 1. Base Lunar Regolith
-  ctx.fillStyle = '#64748b';
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-  // Regolith micro-noise
-  const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const data = imgData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    const noise = (Math.random() - 0.5) * 28;
-    const baseVal = 105 + noise;
-    data[i] = baseVal;
-    data[i + 1] = baseVal;
-    data[i + 2] = baseVal + 3; // slight lunar bluish-slate tint
-    data[i + 3] = 255;
-  }
-  ctx.putImageData(imgData, 0, 0);
-
-  // 2. Major Lunar Maria (Dark Basaltic Plains)
-  const maria = [
-    { x: 780, y: 340, rx: 240, ry: 190, dark: 0.38 }, // Oceanus Procellarum
-    { x: 1080, y: 390, rx: 110, ry: 90, dark: 0.42 },  // Mare Tranquillitatis
-    { x: 1040, y: 310, rx: 100, ry: 80, dark: 0.40 },  // Mare Serenitatis
-    { x: 1240, y: 370, rx: 70, ry: 60, dark: 0.45 },   // Mare Crisium
-    { x: 920, y: 460, rx: 120, ry: 90, dark: 0.35 },   // Mare Nubium
-    { x: 1024, y: 880, rx: 280, ry: 100, dark: 0.55 }, // South Pole - Aitken Basin
-  ];
-
-  maria.forEach(m => {
-    const grad = ctx.createRadialGradient(m.x, m.y, 10, m.x, m.y, Math.max(m.rx, m.ry));
-    grad.addColorStop(0, `rgba(15, 23, 42, ${m.dark})`);
-    grad.addColorStop(0.7, `rgba(30, 41, 59, ${m.dark * 0.6})`);
-    grad.addColorStop(1, 'rgba(51, 65, 85, 0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.ellipse(m.x, m.y, m.rx, m.ry, 0, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // 3. Procedural Craters & Ejecta Rays
-  const craters = [
-    { x: 980, y: 650, r: 24, rays: true },  // Tycho Crater
-    { x: 820, y: 430, r: 20, rays: true },  // Copernicus
-    { x: 740, y: 390, r: 18, rays: false }, // Kepler
-    // South Pole Artemis interest craters
-    { x: 1024, y: 990, r: 26, rays: true }, // Shackleton Crater area
-    { x: 1060, y: 960, r: 22, rays: false }, // Malapert Mountain area
-    { x: 1180, y: 970, r: 20, rays: false }, // Nobile Crater
-    { x: 920, y: 980, r: 19, rays: false },  // Connecting Ridge area
-  ];
-
-  craters.forEach(c => {
-    // Crater floor
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.6)';
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Crater bright rim
-    ctx.strokeStyle = 'rgba(241, 245, 249, 0.75)';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, c.r, 0, Math.PI * 2);
-    ctx.stroke();
-
-    // Ejecta rays
-    if (c.rays) {
-      ctx.strokeStyle = 'rgba(248, 250, 252, 0.25)';
-      ctx.lineWidth = 1.2;
-      for (let angle = 0; angle < Math.PI * 2; angle += Math.PI / 8) {
-        ctx.beginPath();
-        ctx.moveTo(c.x, c.y);
-        ctx.lineTo(
-          c.x + Math.cos(angle) * (c.r * 6 + Math.random() * 40),
-          c.y + Math.sin(angle) * (c.r * 6 + Math.random() * 40)
-        );
-        ctx.stroke();
-      }
-    }
-  });
+  drawLunarBase(ctx, canvas.width, canvas.height, false);
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = THREE.RepeatWrapping;
@@ -128,58 +220,95 @@ function createLunarTexture(): THREE.CanvasTexture {
   return texture;
 }
 
-// Generate NASA LOLA Slope Heatmap Texture (Green <5°, Yellow 5-15°, Red >15°)
+// Generate Bump Map for Three.js 3D depth and specular shadows
+function createLunarBumpMap(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d')!;
+
+  drawLunarBase(ctx, canvas.width, canvas.height, true);
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  return texture;
+}
+
+// Generate NASA LOLA Slope Heatmap Overlay Texture (Green <5°, Yellow 5-15°, Red >15°)
+// Matches NASA MoonTrek: translucent overlay draped on top of visible craters!
 function createLolaSlopeTexture(): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
   canvas.width = 2048;
   canvas.height = 1024;
   const ctx = canvas.getContext('2d')!;
 
-  // Default moderate slope baseline (Yellow/Greenish rolling terrain)
-  ctx.fillStyle = '#064e3b'; // Flat regolith base (<5 deg safe)
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // 1. Draw base lunar surface with craters and topography first
+  drawLunarBase(ctx, canvas.width, canvas.height, false);
 
-  // Steep rugged highlands & crater walls (Red >15° and Amber 5-15°)
-  const ruggedZones = [
-    // South Pole rugged terrain
-    { x: 1024, y: 950, rx: 350, ry: 74, color: '#b45309' }, // south pole ring (amber)
-    { x: 1024, y: 990, rx: 28, ry: 20, color: '#dc2626' },  // Shackleton steep inner wall
-    { x: 1180, y: 970, rx: 35, ry: 25, color: '#dc2626' },  // Nobile crater hazardous slopes
-    { x: 1060, y: 960, rx: 25, ry: 20, color: '#f59e0b' },  // Malapert mountain flanks
-    { x: 920, y: 980, rx: 30, ry: 15, color: '#f59e0b' },   // Connecting ridge flank
-    // Equatorial highlands
-    { x: 1400, y: 500, rx: 300, ry: 200, color: '#d97706' },
-    { x: 400, y: 400, rx: 250, ry: 180, color: '#b45309' },
+  // 2. Apply Semi-Transparent LOLA Slope Overlay (alpha 0.52 so craters shine through)
+  ctx.save();
+  ctx.globalAlpha = 0.55;
+
+  // Broad moderate slope highland baseline (amber/yellow-green)
+  const highlandOverlay = ctx.createLinearGradient(0, 700, 0, canvas.height);
+  highlandOverlay.addColorStop(0, 'rgba(234, 179, 8, 0.45)');   // Golden yellow (5-15°)
+  highlandOverlay.addColorStop(0.7, 'rgba(245, 158, 11, 0.55)'); // Amber slope
+  highlandOverlay.addColorStop(1, 'rgba(220, 38, 38, 0.45)');    // Polar rim slopes
+  ctx.fillStyle = highlandOverlay;
+  ctx.fillRect(0, 700, canvas.width, canvas.height - 700);
+
+  // Large Smooth Basaltic Plains & Flat Basins (Emerald Green <5° Safe Zone)
+  const safeFlatZones = [
+    { x: 1080, y: 390, rx: 140, ry: 100 }, // Mare Tranquillitatis (Apollo 11)
+    { x: 780, y: 340, rx: 250, ry: 190 },  // Oceanus Procellarum
+    { x: 1040, y: 310, rx: 110, ry: 80 },  // Mare Serenitatis
+    { x: 1240, y: 370, rx: 80, ry: 65 },   // Mare Crisium
+    // Flat South Pole crater floors and plateaus (<5° safe zones like in MoonTrek photo)
+    { x: 800, y: 920, rx: 160, ry: 90 },   // Western polar plain (deep green patch)
+    { x: 1240, y: 930, rx: 150, ry: 85 },  // Eastern polar plain (green patch)
+    { x: 1024, y: 980, rx: 45, ry: 25 },   // Shackleton ridge flat corridor
   ];
 
-  ruggedZones.forEach(z => {
-    const grad = ctx.createRadialGradient(z.x, z.y, 5, z.x, z.y, Math.max(z.rx, z.ry));
-    grad.addColorStop(0, z.color);
-    grad.addColorStop(0.7, '#f59e0b');
-    grad.addColorStop(1, '#059669');
+  safeFlatZones.forEach(z => {
+    const grad = ctx.createRadialGradient(z.x, z.y, 10, z.x, z.y, Math.max(z.rx, z.ry));
+    grad.addColorStop(0, '#10b981');   // Vivid Emerald Green
+    grad.addColorStop(0.7, '#059669'); // Deep Green
+    grad.addColorStop(1, 'rgba(5, 150, 105, 0)');
     ctx.fillStyle = grad;
     ctx.beginPath();
     ctx.ellipse(z.x, z.y, z.rx, z.ry, 0, 0, Math.PI * 2);
     ctx.fill();
   });
 
-  // Flat Safe Maria (< 3° Slope - Deep Green)
-  const safeFlatMaria = [
-    { x: 1080, y: 390, rx: 120, ry: 90 }, // Mare Tranquillitatis (Apollo 11 - extremely flat)
-    { x: 780, y: 340, rx: 220, ry: 170 },  // Oceanus Procellarum
-    { x: 1040, y: 310, rx: 90, ry: 70 },
+  // Steep Crater Walls & Escarpments (Red/Orange >15° Hazard Zones like in MoonTrek photo)
+  const steepHazardZones = [
+    // South Pole crater rim drop-offs (vivid red & orange rims)
+    { x: 1024, y: 994, rx: 32, ry: 20 }, // Shackleton inner wall
+    { x: 1180, y: 970, rx: 36, ry: 24 }, // Nobile crater inner walls
+    { x: 1060, y: 960, rx: 30, ry: 18 }, // Malapert massif steep drops
+    { x: 920, y: 980, rx: 28, ry: 16 },  // Connecting ridge steep flanks
+    { x: 970, y: 965, rx: 24, ry: 16 },  // de Gerlache crater rim
+    { x: 1080, y: 990, rx: 25, ry: 16 }, // Faustini crater wall
+    { x: 1120, y: 940, rx: 30, ry: 18 }, // Amundsen crater wall
+    { x: 990, y: 940, rx: 22, ry: 14 },  // Shoemaker crater rim
+    // Highlands escarpments
+    { x: 1400, y: 500, rx: 220, ry: 140 },
+    { x: 400, y: 400, rx: 180, ry: 130 },
   ];
 
-  safeFlatMaria.forEach(m => {
-    const grad = ctx.createRadialGradient(m.x, m.y, 10, m.x, m.y, Math.max(m.rx, m.ry));
-    grad.addColorStop(0, '#10b981'); // Safe green
-    grad.addColorStop(0.8, '#059669');
-    grad.addColorStop(1, '#047857');
+  steepHazardZones.forEach(z => {
+    const grad = ctx.createRadialGradient(z.x, z.y, 4, z.x, z.y, Math.max(z.rx, z.ry));
+    grad.addColorStop(0, '#ef4444');   // Bright Red Hazard
+    grad.addColorStop(0.6, '#f97316'); // Orange Warning
+    grad.addColorStop(1, 'rgba(249, 115, 22, 0)');
     ctx.fillStyle = grad;
     ctx.beginPath();
-    ctx.ellipse(m.x, m.y, m.rx, m.ry, 0, 0, Math.PI * 2);
+    ctx.ellipse(z.x, z.y, z.rx, z.ry, 0, 0, Math.PI * 2);
     ctx.fill();
   });
+
+  ctx.restore();
 
   const texture = new THREE.CanvasTexture(canvas);
   texture.wrapS = THREE.RepeatWrapping;
@@ -225,6 +354,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   // Textures
   const naturalTextureRef = useRef<THREE.CanvasTexture | null>(null);
   const slopeTextureRef = useRef<THREE.CanvasTexture | null>(null);
+  const bumpTextureRef = useRef<THREE.CanvasTexture | null>(null);
 
   // Fly camera to a specific landing site
   const flyToSite = useCallback((site: CandidateSite) => {
@@ -311,12 +441,15 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     // 6. Textures & Moon Sphere
     naturalTextureRef.current = createLunarTexture();
     slopeTextureRef.current = createLolaSlopeTexture();
+    bumpTextureRef.current = createLunarBumpMap();
 
     const moonGeometry = new THREE.SphereGeometry(MOON_RADIUS, 64, 64);
     const moonMaterial = new THREE.MeshStandardMaterial({
       map: slopeTextureRef.current,
-      roughness: 0.85,
-      metalness: 0.1,
+      bumpMap: bumpTextureRef.current,
+      bumpScale: 0.05,
+      roughness: 0.82,
+      metalness: 0.08,
     });
     const moonMesh = new THREE.Mesh(moonGeometry, moonMaterial);
     scene.add(moonMesh);
