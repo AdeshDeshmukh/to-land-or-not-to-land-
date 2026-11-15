@@ -27,24 +27,24 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
 
     // Site-specific topographic profile mathematical synthesis based on LOLA DEM signatures
     const rawElevOffset = (x: number): number => {
-      if (site.id === 'shackleton_rim') {
-        // Shackleton: Narrow rim crest at x=0. Outer flank (x < 0) has gentle slope.
-        // Inner crater wall (x > 0) plunges down into deep crater (>30° drop).
+      if (site.id === 'shackleton_rim' || site.id === 'de_gerlache_rim_2' || site.id === 'cabeus_b_peak') {
         if (x < -200) {
-          return (x + 200) * 0.12 - Math.sin(x * 0.02) * 6;
+          return (x + 200) * 0.14 - Math.sin(x * 0.02) * 6;
         } else if (x > 200) {
-          return -(x - 200) * 0.48 - Math.sin(x * 0.015) * 12;
+          return -(x - 200) * 0.42 - Math.sin(x * 0.015) * 12;
         }
-        return -Math.pow(x / 200, 2) * 8 + Math.cos(x * 0.03) * 2;
+        return -Math.pow(x / 220, 2) * 8 + Math.cos(x * 0.03) * 2;
       }
-      if (site.id === 'malapert_mountain') {
-        return -Math.pow(x / 500, 2) * 85 + Math.sin(x * 0.01) * 15;
+      if (site.id === 'malapert_mountain' || site.id === 'malapert_massif' || site.id === 'mons_mouton' || site.id === 'mons_mouton_plateau') {
+        const drop = site.id === 'mons_mouton_plateau' ? 42 : 78;
+        return -Math.pow(x / 520, 2) * drop + Math.sin(x * 0.01) * 10;
       }
-      if (site.id === 'nobile_crater_rim') {
-        return -(x * 0.28) + Math.sin(x * 0.018) * 35 + Math.cos(x * 0.007) * 25;
+      if (site.id === 'nobile_crater_rim' || site.id === 'nobile_rim_1' || site.id === 'nobile_rim_2' || site.id === 'haworth') {
+        const pitch = site.id === 'nobile_rim_2' ? 0.28 : 0.18;
+        return -(x * pitch) + Math.sin(x * 0.018) * 28 + Math.cos(x * 0.007) * 20;
       }
-      if (site.id === 'mare_tranquillitatis') {
-        return Math.sin(x * 0.005) * 2.5 + Math.cos(x * 0.02) * 0.8;
+      if (site.id === 'mare_tranquillitatis' || site.id === 'slater_plain') {
+        return Math.sin(x * 0.005) * 4.5 + Math.cos(x * 0.02) * 1.4;
       }
       if (site.id === 'connecting_ridge') {
         return -Math.abs(x) * 0.22 + Math.cos(x * 0.01) * 12;
@@ -61,16 +61,16 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
       let localSlope = baseSlope;
       if (x === 0) {
         localSlope = baseSlope;
-      } else if (site.id === 'shackleton_rim') {
-        if (x > 250) localSlope = Math.min(34, 18 + (x - 250) * 0.02);
+      } else if (site.id === 'shackleton_rim' || site.id === 'de_gerlache_rim_2' || site.id === 'cabeus_b_peak') {
+        if (x > 250) localSlope = Math.min(34, 16 + (x - 250) * 0.02);
         else if (x < -250) localSlope = Math.min(14, 6 + Math.abs(x) * 0.008);
         else localSlope = baseSlope;
-      } else if (site.id === 'malapert_mountain') {
-        localSlope = Math.max(4.5, baseSlope + Math.abs(x) * 0.006 + Math.sin(x * 0.012) * 1.4);
-      } else if (site.id === 'nobile_crater_rim') {
-        localSlope = Math.min(28, 15 + Math.abs(Math.sin(x * 0.02)) * 11);
-      } else if (site.id === 'mare_tranquillitatis') {
-        localSlope = Math.max(0.8, Math.min(2.8, 1.8 + Math.sin(x * 0.01) * 0.6));
+      } else if (site.id === 'malapert_mountain' || site.id === 'malapert_massif' || site.id === 'mons_mouton' || site.id === 'mons_mouton_plateau') {
+        localSlope = Math.max(2.2, baseSlope + Math.abs(x) * 0.005 + Math.sin(x * 0.012) * 1.1);
+      } else if (site.id === 'nobile_crater_rim' || site.id === 'nobile_rim_2' || site.id === 'nobile_rim_1' || site.id === 'haworth') {
+        localSlope = Math.min(28, baseSlope + Math.abs(Math.sin(x * 0.02)) * 8);
+      } else if (site.id === 'mare_tranquillitatis' || site.id === 'slater_plain') {
+        localSlope = Math.max(1.2, baseSlope + Math.sin(x * 0.01) * 1.4);
       } else if (site.id === 'connecting_ridge') {
         localSlope = Math.abs(x) > 200 ? 16.5 : baseSlope;
       } else {

@@ -212,6 +212,8 @@ export interface SolarTelemetryAtTime {
   rawSunElevDeg: number;
   effectiveSunElevDeg: number;
   horizonCutoffDeg: number;
+  sunAzimuthDeg: number;
+  sunCompass: string;
   isSunlit: boolean;
   illuminationPct: number;
 }
@@ -219,7 +221,44 @@ export interface SolarTelemetryAtTime {
 export interface EarthTelemetryAtTime {
   earthElevDeg: number;
   effectiveEarthElevDeg: number;
+  earthAzimuthDeg: number;
+  earthCompass: string;
   hasLos: boolean;
+}
+
+const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
+
+export function azimuthCompassLabel(azDeg: number): string {
+  const norm = ((azDeg % 360) + 360) % 360;
+  return COMPASS_POINTS[Math.round(norm / 45) % 8];
+}
+
+/**
+ * Compute local compass azimuth [0, 360) deg from North (0=N, 90=E, 180=S, 270=W)
+ * using the lunar surface ENU tangent frame aligned with Three.js SphereGeometry axes.
+ */
+export function computeLocalAzimuthDeg(
+  latDeg: number,
+  lonDeg: number,
+  targetVec: { x: number; y: number; z: number }
+): number {
+  const latRad = (latDeg * Math.PI) / 180;
+  const lonRad = (lonDeg * Math.PI) / 180;
+  const sinLat = Math.sin(latRad);
+  const cosLat = Math.cos(latRad);
+  const sinLon = Math.sin(lonRad);
+  const cosLon = Math.cos(lonRad);
+
+  const ex = -sinLon;
+  const ez = -cosLon;
+  const nxAxis = -sinLat * cosLon;
+  const nyAxis = cosLat;
+  const nzAxis = sinLat * sinLon;
+
+  const east = targetVec.x * ex + targetVec.z * ez;
+  const north = targetVec.x * nxAxis + targetVec.y * nyAxis + targetVec.z * nzAxis;
+  const az = (Math.atan2(east, north) * 180) / Math.PI;
+  return ((az % 360) + 360) % 360;
 }
 
 /**
@@ -504,11 +543,29 @@ export function getEarthPoint(offsetDays: number): SubsolarPoint {
 }
 
 /**
- * Surveyed horizon relief cutoff calibration (deg) for canonical NASA/Artemis mission sites
- * so nominal T=0 solar elevation and continuous illumination align seamlessly with benchmark telemetry.
+ * Surveyed horizon relief cutoff calibration (deg) for NASA Artemis candidate regions
+ * so nominal T=0 solar elevation and continuous illumination align with South Pole relief.
  */
 export function getCanonicalSiteSunCutoffDeg(siteId: string): number | null {
   switch (siteId) {
+    case 'cabeus_b_peak':
+      return -1.45;
+    case 'haworth':
+      return -0.20;
+    case 'malapert_massif':
+      return -2.15;
+    case 'mons_mouton':
+      return -2.55;
+    case 'mons_mouton_plateau':
+      return -2.40;
+    case 'nobile_rim_1':
+      return 0.15;
+    case 'nobile_rim_2':
+      return 1.85;
+    case 'de_gerlache_rim_2':
+      return -2.35;
+    case 'slater_plain':
+      return 1.35;
     case 'shackleton_rim':
       return -2.94;
     case 'malapert_mountain':
@@ -537,6 +594,8 @@ export function computeSolarTelemetryAtTime(
   const normal = latLonToCartesian(lat, lon, 1);
   const dot = Math.max(-1, Math.min(1, normal.x * sunVec.x + normal.y * sunVec.y + normal.z * sunVec.z));
   const rawSunElevDeg = (Math.asin(dot) * 180) / Math.PI;
+  const sunAzimuthDeg = computeLocalAzimuthDeg(lat, lon, sunVec);
+  const sunCompass = azimuthCompassLabel(sunAzimuthDeg);
 
   const crater = sampleCraterField(lat, lon);
   let horizonCutoffDeg = crater.horizonCutoffDeg;
@@ -568,6 +627,8 @@ export function computeSolarTelemetryAtTime(
     rawSunElevDeg,
     effectiveSunElevDeg,
     horizonCutoffDeg,
+    sunAzimuthDeg,
+    sunCompass,
     isSunlit,
     illuminationPct,
   };
@@ -587,14 +648,21 @@ export function computeEarthTelemetryAtTime(
 
   const dot = Math.max(-1, Math.min(1, normal.x * earthVec.x + normal.y * earthVec.y + normal.z * earthVec.z));
   const earthElevDeg = (Math.asin(dot) * 180) / Math.PI;
+  const earthAzimuthDeg = computeLocalAzimuthDeg(lat, lon, earthVec);
+  const earthCompass = azimuthCompassLabel(earthAzimuthDeg);
 
   const crater = sampleCraterField(lat, lon);
   let horizonBlockDeg = Math.max(-1.8, crater.horizonCutoffDeg * 0.85);
 
   if (site) {
-    if (site.id === 'nobile_crater_rim' || (!site.id.startsWith('custom') && !site.defaultEarthLos)) {
-      // Surrounded by steep crater walls toward Earth azimuth
-      horizonBlockDeg = Math.max(horizonBlockDeg, 10.8);
+    if (
+      site.id === 'nobile_rim_2' ||
+      site.id === 'slater_plain' ||
+      site.id === 'nobile_crater_rim' ||
+      (!site.id.startsWith('custom') && !site.defaultEarthLos)
+    ) {
+      // Surrounded by steep polar crater walls or far-side massif blocking low Earth azimuth
+      horizonBlockDeg = Math.max(horizonBlockDeg, 9.5);
     } else if (site.coordinates.elevation_m >= 2500) {
       // High South Pole summit protrudes above southern horizon curvature
       horizonBlockDeg = Math.min(horizonBlockDeg, -1.7);
@@ -605,8 +673,79 @@ export function computeEarthTelemetryAtTime(
   return {
     earthElevDeg,
     effectiveEarthElevDeg,
+    earthAzimuthDeg,
+    earthCompass,
     hasLos: effectiveEarthElevDeg >= -1.8,
   };
+}
+
+/**
+ * Compute a 72-point (0°..355°) local topographic horizon skyline silhouette (deg)
+ * for visualizing crater walls vs. elevated polar plateaus in LocalHorizonSkyView.
+ */
+export function computeLocalHorizonProfile(
+  lat: number,
+  lon: number,
+  site?: CandidateSite
+): { azimuthDeg: number; cutoffDeg: number }[] {
+  const baseSolar = computeSolarTelemetryAtTime(lat, lon, 0, site);
+  const baseCutoff = baseSolar.horizonCutoffDeg;
+  const phase = ((lat * 7.3 + lon * 13.7) % 360) * (Math.PI / 180);
+  const isMassif = site ? site.coordinates.elevation_m >= 2500 : lat <= -82 && baseCutoff < 0;
+  const isBlockedEarth = site ? !site.defaultEarthLos : false;
+
+  const pts: { azimuthDeg: number; cutoffDeg: number }[] = [];
+  for (let az = 0; az < 360; az += 5) {
+    const rad = (az * Math.PI) / 180;
+    const harmonic =
+      Math.sin(rad * 2 + phase) * 1.1 +
+      Math.cos(rad * 3 - phase * 0.7) * 0.75 +
+      Math.sin(rad * 5 + phase * 1.3) * 0.35;
+    let relief = baseCutoff + harmonic * (isMassif ? 0.55 : 0.95);
+
+    // Sculpt a realistic northern massif obstruction when DTE toward Earth (Az ~0°/360°) is occluded
+    if (isBlockedEarth) {
+      const northDist = Math.min(az, 360 - az);
+      if (northDist < 55) {
+        const ridge = Math.cos((northDist / 55) * (Math.PI / 2));
+        relief = Math.max(relief, 4.5 + ridge * ridge * 5.2);
+      }
+    }
+
+    pts.push({
+      azimuthDeg: az,
+      cutoffDeg: Math.max(-4.5, Math.min(12.5, Number(relief.toFixed(2)))),
+    });
+  }
+  return pts;
+}
+
+/**
+ * Scan [-14d, +14d] around the active Mission Epoch in 6-hour increments to find the optimal
+ * peak solar illumination window for a given site so users can jump straight to maximum sunlight.
+ */
+export function findBestSunWindowOffset(
+  site: CandidateSite,
+  currentOffsetDays = 0,
+  nominalOffsetDays = 0
+): number {
+  let bestOffset = currentOffsetDays;
+  let bestElev = -Infinity;
+
+  for (let d = nominalOffsetDays - 14; d <= nominalOffsetDays + 14.001; d += 0.25) {
+    const rounded = Math.round(d * 100) / 100;
+    const solar = computeSolarTelemetryAtTime(
+      site.coordinates.latitude,
+      site.coordinates.longitude,
+      rounded,
+      site
+    );
+    if (solar.effectiveSunElevDeg > bestElev) {
+      bestElev = solar.effectiveSunElevDeg;
+      bestOffset = rounded;
+    }
+  }
+  return bestOffset;
 }
 
 /**

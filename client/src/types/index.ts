@@ -16,6 +16,7 @@ export interface CandidateSite {
   id: string;
   name: string;
   region: string;
+  selectionStatus?: 'Added in 2024' | 'Retained from 2022';
   coordinates: Coordinates;
   description: string;
   terrain: TerrainMetrics;
