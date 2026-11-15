@@ -156,6 +156,9 @@ export function estimateLunarTerrain(lat: number, lon: number, customName?: stri
 
 export const REFERENCE_EPOCH_MS = Date.UTC(2026, 8, 1, 0, 0, 0); // 2026-09-01 00:00 UTC
 export const SYNODIC_PERIOD_DAYS = 29.530589;
+export const DRACONIC_YEAR_DAYS = 346.62;
+export const DRACONIC_MONTH_DAYS = 27.2122;
+export const ANOMALISTIC_MONTH_DAYS = 27.5545;
 export const MOON_RADIUS_KM = 1737.4;
 
 export interface SouthPoleCrater {
@@ -271,11 +274,11 @@ export function parseMissionUtcInputs(dateStr: string, timeStr: string): number 
 
 /**
  * Real subsolar point at a given mission time offset (days).
- * Lunar subsolar latitude varies within +/-1.54 deg (Southern Lunar Summer near T=0);
+ * Lunar subsolar latitude varies within +/-1.54 deg over the 346.62-day draconic year;
  * subsolar longitude regresses westward at 360 deg / 29.530589 days.
  */
 export function getSubsolarPoint(offsetDays: number): SubsolarPoint {
-  const latDeg = -1.45 * Math.cos(((offsetDays / SYNODIC_PERIOD_DAYS) * Math.PI) + 0.12);
+  const latDeg = -1.54 * Math.cos(((offsetDays / DRACONIC_YEAR_DAYS) * 2 * Math.PI) + 0.12);
   const lonDeg = normalizeLonDeg(-42.0 - (offsetDays / SYNODIC_PERIOD_DAYS) * 360.0);
   const sunVec = latLonToCartesian(latDeg, lonDeg, 1);
   return { latDeg, lonDeg, sunVec };
@@ -475,11 +478,12 @@ export function sunElevToIlluminationPct(effectiveSunElevDeg: number): number {
 
 /**
  * Compute optical Earth selenographic libration point at a mission time offset (days).
- * Negative southern libration (-4.8° near T=0) lifts Earth above the Lunar South Pole horizon.
+ * Latitude libration (+/-6.68 deg, 27.2122d draconic month) lifts Earth above or below
+ * the Lunar South Pole horizon; longitude libration (+/-7.7 deg, 27.5545d anomalistic month).
  */
 export function getEarthPoint(offsetDays: number): SubsolarPoint {
-  const latDeg = -4.8 * Math.cos((offsetDays / 27.32) * 2 * Math.PI - 0.15);
-  const lonDeg = 6.4 * Math.sin((offsetDays / 27.55) * 2 * Math.PI + 0.28);
+  const latDeg = -6.68 * Math.cos((offsetDays / DRACONIC_MONTH_DAYS) * 2 * Math.PI - 0.15);
+  const lonDeg = 7.7 * Math.sin((offsetDays / ANOMALISTIC_MONTH_DAYS) * 2 * Math.PI + 0.28);
   const sunVec = latLonToCartesian(latDeg, lonDeg, 1);
   return { latDeg, lonDeg, sunVec };
 }

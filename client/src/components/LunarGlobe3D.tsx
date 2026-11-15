@@ -11,8 +11,8 @@ import {
   sampleCraterField,
   sunElevToIlluminationPct,
   computeSolarTelemetryAtTime,
+  computeEarthTelemetryAtTime,
   computeSiteIllumination,
-  computeSiteEarthLos,
   getSouthPoleCraters,
   formatMissionUtc,
   parseMissionUtcInputs,
@@ -637,9 +637,13 @@ function paintDynamicOverlayTexture(
     }
 
     // 4. Direct-to-Earth (DTE) LOS check
-    if (!isRed && !hasLos) {
-      if (requiresLos) isRed = true;
-      else isYellow = true;
+    if (!isRed) {
+      if (!hasLos) {
+        if (requiresLos) isRed = true;
+        else isYellow = true;
+      } else if (effectiveEarthElev < 5.0) {
+        isYellow = true;
+      }
     }
 
     const p = i * 4;
@@ -729,9 +733,20 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     const map = new Map<string, { status: RiskLevel; illumPct: number; hasLos: boolean }>();
     sites.forEach((site) => {
       const illumPct = computeSiteIllumination(site, sunIlluminationOffset);
-      const hasLos = computeSiteEarthLos(site, sunIlluminationOffset);
-      const risk = assessLandingSiteRisk(site, illumPct, hasLos, lander);
-      map.set(site.id, { status: risk.overall_status, illumPct, hasLos });
+      const earthTel = computeEarthTelemetryAtTime(
+        site.coordinates.latitude,
+        site.coordinates.longitude,
+        sunIlluminationOffset,
+        site
+      );
+      const risk = assessLandingSiteRisk(
+        site,
+        illumPct,
+        earthTel.hasLos,
+        lander,
+        earthTel.effectiveEarthElevDeg
+      );
+      map.set(site.id, { status: risk.overall_status, illumPct, hasLos: earthTel.hasLos });
     });
     return map;
   }, [sites, sunIlluminationOffset, lander]);

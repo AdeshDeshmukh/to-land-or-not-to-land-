@@ -8,6 +8,10 @@ export const RISK_THRESHOLDS = {
   illumination: {
     greenMin: 70, // percent
     yellowMin: 30, // percent
+  },
+  earthLos: {
+    greenMinElevDeg: 5.0,  // deg above horizon for unobstructed link
+    yellowMinElevDeg: 0.0, // 0 to 5 deg grazing horizon caution
   }
 };
 
@@ -83,21 +87,42 @@ export function evaluateIllumination(illuminationPct: number, lander?: LanderPro
   };
 }
 
-export function evaluateEarthLos(hasLos: boolean, lander?: LanderProfile): RiskFactor {
+export function evaluateEarthLos(
+  hasLos: boolean,
+  lander?: LanderProfile,
+  earthElevDeg?: number
+): RiskFactor {
   const requiresLos = lander ? lander.requiresEarthLos : true;
+  const elevSuffix = earthElevDeg !== undefined
+    ? ` (${earthElevDeg >= 0 ? '+' : ''}${earthElevDeg.toFixed(1)}°)`
+    : '';
 
-  let level: RiskLevel = hasLos ? 'GREEN' : (requiresLos ? 'RED' : 'YELLOW');
-  let explanation = hasLos
-    ? 'Unobstructed direct line-of-sight communication link to NASA Deep Space Network.'
-    : (requiresLos 
+  if (!hasLos) {
+    const level: RiskLevel = requiresLos ? 'RED' : 'YELLOW';
+    return {
+      name: 'Earth Line-of-Sight (LOS)',
+      value: `No Direct LOS${elevSuffix}`,
+      level,
+      explanation: requiresLos
         ? 'Critical: Direct comms link blocked by topography. Continuous Earth line-of-sight required.'
-        : 'Notice: Direct Earth LOS blocked. Lunar orbital relay link required.');
+        : 'Notice: Direct Earth LOS blocked. Lunar orbital relay link required.',
+    };
+  }
+
+  if (earthElevDeg !== undefined && earthElevDeg < RISK_THRESHOLDS.earthLos.greenMinElevDeg) {
+    return {
+      name: 'Earth Line-of-Sight (LOS)',
+      value: `Grazing LOS${elevSuffix}`,
+      level: 'YELLOW',
+      explanation: `Caution: Earth is low on the horizon (${earthElevDeg.toFixed(1)}° < 5.0°). Intermittent terrain diffraction or link fade possible.`,
+    };
+  }
 
   return {
     name: 'Earth Line-of-Sight (LOS)',
-    value: hasLos ? 'Direct LOS Available' : 'No Direct LOS (Relay Required)',
-    level,
-    explanation,
+    value: `Direct LOS Available${elevSuffix}`,
+    level: 'GREEN',
+    explanation: 'Unobstructed direct line-of-sight communication link to NASA Deep Space Network.',
   };
 }
 
@@ -105,7 +130,8 @@ export function assessLandingSiteRisk(
   site: CandidateSite, 
   currentIllumination?: number, 
   hasLos?: boolean,
-  lander?: LanderProfile
+  lander?: LanderProfile,
+  earthElevDeg?: number
 ): RiskAssessment {
   const illPct = currentIllumination !== undefined ? currentIllumination : site.defaultIlluminationPct;
   const los = hasLos !== undefined ? hasLos : site.defaultEarthLos;
@@ -113,7 +139,7 @@ export function assessLandingSiteRisk(
   const slopeFactor = evaluateSlope(site.terrain.slope_deg, lander);
   const roughnessFactor = evaluateRoughness(site.terrain.roughness, site.terrain.roughness_detail, lander);
   const illuminationFactor = evaluateIllumination(illPct, lander);
-  const losFactor = evaluateEarthLos(los, lander);
+  const losFactor = evaluateEarthLos(los, lander, earthElevDeg);
 
   const factors = [slopeFactor, roughnessFactor, illuminationFactor, losFactor];
 

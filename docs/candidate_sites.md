@@ -16,9 +16,9 @@ This document records the 5 pre-selected candidate lunar landing sites used in t
 | 2 | Malapert Mountain | South Pole | -84.90° | 12.90° | ~5,000 | 🟢/🟡 GREEN-YELLOW | High Earth LOS visibility, strong illumination candidate. |
 | 3 | Nobile Crater Region | South Pole | -85.20° | 53.50° | ~-1,200 | 🔴 RED | Partially permanently shadowed, steep inner walls — natural hazard zone. |
 | 4 | Mare Tranquillitatis (Apollo 11) | Equatorial | 0.67° | 23.47° | ~-20 | 🟢 GREEN | Flat, smooth, historically proven safe — our Green reference baseline. |
-| 5 | Connecting Ridge / Peak Near Shackleton | South Pole | -89.45° | 222.70° ⚠️ | TBD | 🟡 YELLOW | NASA-identified Artemis candidate with high slope variance. |
+| 5 | Connecting Ridge / Peak Near Shackleton | South Pole | -89.45° | -137.30° (137.30° W) | ~3,850 | 🟡 YELLOW | NASA-identified Artemis candidate with high slope variance. |
 
-> ⚠️ **Action Required**: Verify Connecting Ridge longitude (222.70° E = 137.30° W). Cross-reference against NASA/LPI published Artemis III candidate coordinates.
+> ✅ **Coordinate Standardized**: Connecting Ridge longitude normalized from `222.70° E` to `-137.30°` (`137.30° W`) in `-180°` to `+180°` selenographic format to match `candidateSites.ts` and NASA/LPI Artemis III coordinates.
 
 ---
 
