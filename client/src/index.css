@@ -16,6 +16,31 @@
     font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   }
 
+  /* Custom SpaceX-style Dark Obsidian Scrollbars (no native bright white bars) */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #262b36 #07080b;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: #07080b;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: #262b36;
+    border-radius: 3px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: #475569;
+  }
+
   .font-mono {
     font-variant-numeric: tabular-nums;
   }
@@ -23,30 +48,44 @@
   input[type="range"] {
     -webkit-appearance: none;
     appearance: none;
-    background: #1C1F26;
+    background: #14171f;
     border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 2px;
     height: 6px;
     cursor: pointer;
+    transition: border-color 150ms ease;
+  }
+
+  input[type="range"]:hover {
+    border-color: rgba(255, 255, 255, 0.35);
   }
 
   input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 12px;
-    height: 12px;
-    background: #FFFFFF;
-    border: 1px solid #000000;
-    border-radius: 1px;
+    width: 13px;
+    height: 13px;
+    background: #ffffff;
+    border: 2px solid #090a0d;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.75);
+    border-radius: 2px;
     cursor: pointer;
+    transition: transform 120ms ease, box-shadow 120ms ease;
+  }
+
+  input[type="range"]:hover::-webkit-slider-thumb {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 1px #38bdf8, 0 0 8px rgba(56, 189, 248, 0.45);
   }
 
   input[type="range"]::-moz-range-thumb {
-    width: 12px;
-    height: 12px;
-    background: #FFFFFF;
-    border: 1px solid #000000;
-    border-radius: 1px;
+    width: 13px;
+    height: 13px;
+    background: #ffffff;
+    border: 2px solid #090a0d;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.75);
+    border-radius: 2px;
     cursor: pointer;
+    transition: transform 120ms ease, box-shadow 120ms ease;
   }
 }

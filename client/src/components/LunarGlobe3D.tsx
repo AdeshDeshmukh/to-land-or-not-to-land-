@@ -18,23 +18,34 @@ import {
   parseMissionUtcInputs,
 } from '../utils/lunarTelemetry';
 import {
-  Compass,
-  RotateCw,
-  ZoomIn,
-  Maximize2,
-  MapPin,
-  Crosshair,
-  Clock,
-  Focus,
   BarChart3,
+  Check,
+  ChevronDown,
+  Clock,
+  ExternalLink,
+  Focus,
+  Globe,
+  GraduationCap,
+  Grid,
+  Info,
   Layers,
+  Mountain,
+  Navigation,
+  Plus,
+  Sun,
+  X,
 } from 'lucide-react';
 import { LocalSurfaceDetailView } from './LocalSurfaceDetailView';
+import { RISK_THRESHOLDS } from '../engine/riskEngine';
+import {
+  buildCelestialSpaceEnvironment,
+  CelestialSpaceEnvironment,
+} from '../utils/celestialSkybox3D';
 
 interface LunarGlobe3DProps {
   sites: CandidateSite[];
   selectedSite: CandidateSite;
-  onSelectSite: (site: CandidateSite) => void;
+  onSelectSite: (site: CandidateSite, options?: { openDrawer?: boolean }) => void;
   sunIlluminationOffset?: number; // Days offset
   lander?: LanderProfile;
   onProbeCoordinate?: (
@@ -44,10 +55,16 @@ interface LunarGlobe3DProps {
     sampledSlopeDeg?: number,
     sampledElevM?: number
   ) => void;
+  missionEpochOffset?: number;
   onChangeDateOffset?: (offsetDays: number) => void;
+  onChangeMissionEpoch?: (epochOffsetDays: number) => void;
   onOpenTelemetryDrawer?: () => void;
   leftDrawerOpen?: boolean;
   rightDrawerOpen?: boolean;
+  rightDrawerWide?: boolean;
+  compareSiteIds?: string[];
+  onToggleCompareSite?: (site: CandidateSite) => void;
+  viewMode?: 'planner' | 'educator';
 }
 
 interface TerrainGrid {
@@ -71,17 +88,114 @@ const ALBEDO_TEX_H = 2048;
 const NORM_TEX_W = 2048;
 const NORM_TEX_H = 1024;
 const MIN_CAM_DIST = 4.10;
-const MAX_CAM_DIST = 15.0;
+const MAX_CAM_DIST = 22.0;
 
-const INITIAL_CAM_POS = new THREE.Vector3(5.6, -5.8, -2.2);
+const DEG2RAD = Math.PI / 180;
+const RAD2DEG = 180 / Math.PI;
+const INITIAL_CAM_LAT = -46;
+const INITIAL_CAM_LON = 0;
+const INITIAL_CAM_DIST = 10.2;
+const MIN_CAM_LAT = -90;
+const MAX_CAM_LAT = 90;
 
-function computeUpForNormal(normal: THREE.Vector3): THREE.Vector3 {
-  const n = normal.clone().normalize();
-  const refUp = Math.abs(n.y) > 0.92 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(0, 1, 0);
-  return refUp.addScaledVector(n, -refUp.dot(n)).normalize();
+function clampCamLat(lat: number): number {
+  return Math.max(MIN_CAM_LAT, Math.min(MAX_CAM_LAT, lat));
 }
 
+function wrapLon(lon: number): number {
+  let w = (((lon + 180) % 360) + 360) % 360 - 180;
+  if (w === -180) w = 180;
+  return w;
+}
+
+// Analytical northward meridian tangent at (latDeg, lonDeg) for Moon Trek North-Up orientation
+function getNorthUpVector(latDeg: number, lonDeg: number, out?: THREE.Vector3): THREE.Vector3 {
+  const phi = (90 - latDeg) * DEG2RAD;
+  const theta = (lonDeg + 180) * DEG2RAD;
+  const cosPhi = Math.cos(phi);
+  const sinPhi = Math.sin(phi);
+  const target = out || new THREE.Vector3();
+  target.set(
+    cosPhi * Math.cos(theta),
+    sinPhi,
+    -cosPhi * Math.sin(theta)
+  );
+  return target.normalize();
+}
+
+function applySelenographicCamera(
+  cam: THREE.PerspectiveCamera,
+  latDeg: number,
+  lonDeg: number,
+  dist: number
+) {
+  const clampedLat = clampCamLat(latDeg);
+  const phi = (90 - clampedLat) * DEG2RAD;
+  const theta = (lonDeg + 180) * DEG2RAD;
+  const sinPhi = Math.sin(phi);
+  cam.position.set(
+    -(dist * sinPhi * Math.cos(theta)),
+    dist * Math.cos(phi),
+    dist * sinPhi * Math.sin(theta)
+  );
+  getNorthUpVector(clampedLat, lonDeg, cam.up);
+  cam.lookAt(0, 0, 0);
+}
+
+interface GraticuleMeridianLabel {
+  id: string;
+  lon: number;
+  text: string;
+  isPrime?: boolean;
+}
+
+interface GraticuleParallelLabel {
+  id: string;
+  lat: number;
+  text: string;
+  isEquator?: boolean;
+}
+
+const GRATICULE_MERIDIANS: GraticuleMeridianLabel[] = [
+  { id: 'lon-0', lon: 0, text: '0°', isPrime: true },
+  { id: 'lon-30e', lon: 30, text: '30°E' },
+  { id: 'lon-60e', lon: 60, text: '60°E' },
+  { id: 'lon-90e', lon: 90, text: '90°E' },
+  { id: 'lon-120e', lon: 120, text: '120°E' },
+  { id: 'lon-150e', lon: 150, text: '150°E' },
+  { id: 'lon-180', lon: 180, text: '180°', isPrime: true },
+  { id: 'lon-150w', lon: -150, text: '150°W' },
+  { id: 'lon-120w', lon: -120, text: '120°W' },
+  { id: 'lon-90w', lon: -90, text: '90°W' },
+  { id: 'lon-60w', lon: -60, text: '60°W' },
+  { id: 'lon-30w', lon: -30, text: '30°W' },
+];
+
+const GRATICULE_PARALLELS: GraticuleParallelLabel[] = [
+  { id: 'lat-80n', lat: 80, text: '80°N' },
+  { id: 'lat-60n', lat: 60, text: '60°N' },
+  { id: 'lat-30n', lat: 30, text: '30°N' },
+  { id: 'lat-0', lat: 0, text: '0° EQ', isEquator: true },
+  { id: 'lat-30s', lat: -30, text: '30°S' },
+  { id: 'lat-60s', lat: -60, text: '60°S' },
+  { id: 'lat-80s', lat: -80, text: '80°S' },
+];
+
+const GRATICULE_POLES = [
+  { id: 'pole-north', lat: 90, lon: 0, text: '▲ 90°N NORTH POLE' },
+  { id: 'pole-south', lat: -90, lon: 0, text: '▼ 90°S SOUTH POLE' },
+] as const;
+
 const SHORT_NAMES: Record<string, string> = {
+  cabeus_b_peak: 'CABEUS B PK',
+  haworth: 'HAWORTH',
+  malapert_massif: 'MALAPERT',
+  mons_mouton: 'MONS MOUTON',
+  mons_mouton_plateau: 'MOUTON PLT',
+  nobile_rim_1: 'NOBILE RIM 1',
+  nobile_rim_2: 'NOBILE RIM 2',
+  de_gerlache_rim_2: 'DE GERLACHE',
+  slater_plain: 'SLATER PLN',
   shackleton_rim: 'SHACKLETON',
   malapert_mountain: 'MALAPERT PK',
   nobile_crater_rim: 'NOBILE RGN',
@@ -90,6 +204,15 @@ const SHORT_NAMES: Record<string, string> = {
 };
 
 const LABEL_OFFSETS: Record<string, { dx: number; dy: number; align: 'left' | 'right' }> = {
+  cabeus_b_peak: { dx: -36, dy: -22, align: 'left' },
+  haworth: { dx: -34, dy: 20, align: 'left' },
+  malapert_massif: { dx: 34, dy: -36, align: 'right' },
+  mons_mouton: { dx: 42, dy: -16, align: 'right' },
+  mons_mouton_plateau: { dx: 42, dy: -52, align: 'right' },
+  nobile_rim_1: { dx: 36, dy: 14, align: 'right' },
+  nobile_rim_2: { dx: 42, dy: 42, align: 'right' },
+  de_gerlache_rim_2: { dx: -38, dy: 44, align: 'left' },
+  slater_plain: { dx: 36, dy: 64, align: 'right' },
   shackleton_rim: { dx: -36, dy: -38, align: 'left' },
   connecting_ridge: { dx: -36, dy: 28, align: 'left' },
   malapert_mountain: { dx: 40, dy: -42, align: 'right' },
@@ -831,24 +954,32 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   sunIlluminationOffset = 0,
   lander,
   onProbeCoordinate,
+  missionEpochOffset = 0,
   onChangeDateOffset,
+  onChangeMissionEpoch,
   onOpenTelemetryDrawer,
   leftDrawerOpen = false,
   rightDrawerOpen = false,
+  rightDrawerWide = false,
+  compareSiteIds = [],
+  onToggleCompareSite,
+  viewMode = 'planner',
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [showAssessmentOverlay, setShowAssessmentOverlay] = useState<boolean>(true);
   const [overlayOpacity, setOverlayOpacity] = useState<number>(42);
-  const [autoRotate, setAutoRotate] = useState<boolean>(false);
-  const [isZoomedIn, setIsZoomedIn] = useState<boolean>(false);
-  const [isLowOrbit, setIsLowOrbit] = useState<boolean>(false);
+  const [ambientLightEnabled, setAmbientLightEnabled] = useState<boolean>(false);
+  const [ambientLightPct, setAmbientLightPct] = useState<number>(0);
+  const [lastAmbientLightPct, setLastAmbientLightPct] = useState<number>(45);
+  const [showGrid, setShowGrid] = useState<boolean>(true);
+  const [showCelestialVectors, setShowCelestialVectors] = useState<boolean>(true);
+  const [showArtemisSites, setShowArtemisSites] = useState<boolean>(true);
   const [isLocalSurfaceOpen, setIsLocalSurfaceOpen] = useState<boolean>(false);
-  const [isProbeMode, setIsProbeMode] = useState<boolean>(false);
-  const [isCoordInputOpen, setIsCoordInputOpen] = useState<boolean>(false);
-  const [latInput, setLatInput] = useState<string>('-89.54');
-  const [lonInput, setLonInput] = useState<string>('0.00');
-  const [labelInput, setLabelInput] = useState<string>('');
-  const [coordError, setCoordError] = useState<string>('');
+  const [isArtemisDropdownOpen, setIsArtemisDropdownOpen] = useState<boolean>(false);
+  const [isArtemisInfoHovered, setIsArtemisInfoHovered] = useState<boolean>(false);
+  const [isRygInfoHovered, setIsRygInfoHovered] = useState<boolean>(false);
+  const [isSiteCardVisible, setIsSiteCardVisible] = useState<boolean>(true);
+  const [hoverCoords, setHoverCoords] = useState<{ lat: number; lon: number } | null>(null);
   const [utcDateInput, setUtcDateInput] = useState<string>(
     () => formatMissionUtc(sunIlluminationOffset).dateStr
   );
@@ -857,11 +988,39 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   );
   const [hoveredSite, setHoveredSite] = useState<CandidateSite | null>(null);
 
-  // Imperative DOM refs for 60fps screen-space pin projection without React re-renders
+  // Imperative DOM refs for 60fps screen-space pin, celestial vector & graticule projection without React re-renders
   const lineElsRef = useRef<Map<string, SVGLineElement>>(new Map());
   const dotElsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const labelElsRef = useRef<Map<string, HTMLButtonElement>>(new Map());
+  const graticuleLabelElsRef = useRef<Map<string, HTMLSpanElement>>(new Map());
+  const sunVectorLabelRef = useRef<HTMLDivElement | null>(null);
+  const earthVectorLabelRef = useRef<HTMLDivElement | null>(null);
   const projectPinsNowRef = useRef<(() => void) | null>(null);
+  const artemisMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // Re-open site inspection card automatically whenever user picks or probes a target
+  useEffect(() => {
+    setIsSiteCardVisible(true);
+  }, [selectedSite.id, selectedSite.coordinates.latitude, selectedSite.coordinates.longitude]);
+
+  // Close Artemis sites dropdown on outside click or Escape
+  useEffect(() => {
+    if (!isArtemisDropdownOpen) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (artemisMenuRef.current && !artemisMenuRef.current.contains(e.target as Node)) {
+        setIsArtemisDropdownOpen(false);
+      }
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setIsArtemisDropdownOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isArtemisDropdownOpen]);
 
   useEffect(() => {
     const formatted = formatMissionUtc(sunIlluminationOffset);
@@ -887,17 +1046,20 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     return { illumPct, hasLos, risk };
   }, [selectedSite, sunIlluminationOffset, lander]);
 
-  const isProbeModeRef = useRef<boolean>(false);
-  isProbeModeRef.current = isProbeMode;
-
   const onProbeCoordinateRef = useRef(onProbeCoordinate);
   onProbeCoordinateRef.current = onProbeCoordinate;
 
   const onSelectSiteRef = useRef(onSelectSite);
   onSelectSiteRef.current = onSelectSite;
 
-  const autoRotateRef = useRef(autoRotate);
-  autoRotateRef.current = autoRotate;
+  const showGridRef = useRef(showGrid);
+  showGridRef.current = showGrid;
+
+  const showCelestialVectorsRef = useRef(showCelestialVectors);
+  showCelestialVectorsRef.current = showCelestialVectors;
+
+  const showArtemisSitesRef = useRef(showArtemisSites);
+  showArtemisSitesRef.current = showArtemisSites;
 
   // Dynamic telemetry snapshot per site for crisp 2D projected pins
   const siteMetricsMap = useMemo(() => {
@@ -922,40 +1084,16 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   );
   const builtSitesSigRef = useRef<string>('');
 
-  const handleDeployCoordTarget = (e: React.FormEvent) => {
-    e.preventDefault();
-    const parsedLat = Number(latInput);
-    const parsedLon = Number(lonInput);
-    if (!Number.isFinite(parsedLat) || parsedLat < -90 || parsedLat > 90) {
-      setCoordError('LATITUDE MUST BE -90 TO +90');
-      return;
-    }
-    if (!Number.isFinite(parsedLon) || parsedLon < -180 || parsedLon > 180) {
-      setCoordError('LONGITUDE MUST BE -180 TO +180');
-      return;
-    }
-    setCoordError('');
-    skipNextFlyRef.current = false;
-    const sampled = sampleTerrainGrid(terrainGridRef.current, parsedLat, parsedLon);
-    if (onProbeCoordinateRef.current) {
-      onProbeCoordinateRef.current(
-        Number(parsedLat.toFixed(2)),
-        Number(parsedLon.toFixed(2)),
-        labelInput.trim() || undefined,
-        sampled.slopeDeg,
-        sampled.elevM
-      );
-    }
-    setIsCoordInputOpen(false);
-    setLabelInput('');
-  };
-
   const applyUtcChange = (nextDate: string, nextTime: string) => {
     setUtcDateInput(nextDate);
     setUtcTimeInput(nextTime);
     const parsedOffset = parseMissionUtcInputs(nextDate, nextTime);
-    if (parsedOffset !== null && onChangeDateOffset) {
-      onChangeDateOffset(parsedOffset);
+    if (parsedOffset !== null) {
+      if (onChangeMissionEpoch) {
+        onChangeMissionEpoch(parsedOffset);
+      } else if (onChangeDateOffset) {
+        onChangeDateOffset(parsedOffset);
+      }
     }
   };
 
@@ -983,9 +1121,16 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const moonMeshRef = useRef<THREE.Mesh | null>(null);
   const overlayMeshRef = useRef<THREE.Mesh | null>(null);
+  const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
   const dirLightRef = useRef<THREE.DirectionalLight | null>(null);
+  const earthshineLightRef = useRef<THREE.DirectionalLight | null>(null);
   const pinsGroupRef = useRef<THREE.Group | null>(null);
   const landingZonesGroupRef = useRef<THREE.Group | null>(null);
+  const graticuleGroupRef = useRef<THREE.Group | null>(null);
+  const celestialVectorsGroupRef = useRef<THREE.Group | null>(null);
+  const celestialEnvRef = useRef<CelestialSpaceEnvironment | null>(null);
+  const sunArrowGroupRef = useRef<THREE.Group | null>(null);
+  const earthArrowGroupRef = useRef<THREE.Group | null>(null);
 
   // Terrain & Dynamic Overlay Canvas refs
   const terrainGridRef = useRef<TerrainGrid | null>(null);
@@ -993,76 +1138,59 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   const overlayTextureRef = useRef<THREE.CanvasTexture | null>(null);
   const bumpImgRef = useRef<HTMLImageElement | undefined>(undefined);
 
-  // Gimbal-lock-free quaternion globe camera state
-  const camDistRef = useRef<number>(INITIAL_CAM_POS.length());
-  const targetCamDistRef = useRef<number>(INITIAL_CAM_POS.length());
-  const angVelRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  // Moon Trek (CesiumJS constrained polar axis) North-Up spherical camera state
+  const camLatRef = useRef<number>(INITIAL_CAM_LAT);
+  const camLonRef = useRef<number>(INITIAL_CAM_LON);
+  const camDistRef = useRef<number>(INITIAL_CAM_DIST);
+  const targetCamDistRef = useRef<number>(INITIAL_CAM_DIST);
+  const angVelRef = useRef<{ lat: number; lon: number }>({ lat: 0, lon: 0 });
   const flyAnimRef = useRef<{
-    targetDir: THREE.Vector3;
-    targetUp: THREE.Vector3;
+    targetLat: number;
+    targetLon: number;
     targetDist: number;
   } | null>(null);
   const hasMountedFlyRef = useRef<boolean>(false);
   const skipNextFlyRef = useRef<boolean>(false);
 
-  // Fly camera to a specific landing site centered smoothly over (0, 0, 0)
+  // Fly camera to a specific landing site centered smoothly with North kept strictly Up
   const flyToSite = useCallback((site: CandidateSite) => {
-    const normal = latLonToVector3(site.coordinates.latitude, site.coordinates.longitude, 1).normalize();
-    const rotY = moonMeshRef.current ? moonMeshRef.current.rotation.y : 0;
-    if (rotY !== 0) {
-      normal.applyAxisAngle(new THREE.Vector3(0, 1, 0), rotY);
-    }
     const targetDist = camDistRef.current < 4.55 ? 4.15 : 4.65;
-    const targetUp = computeUpForNormal(normal);
+    const targetLat = clampCamLat(site.coordinates.latitude);
+    const targetLon = wrapLon(site.coordinates.longitude);
 
-    angVelRef.current = { x: 0, y: 0 };
+    angVelRef.current = { lat: 0, lon: 0 };
     targetCamDistRef.current = targetDist;
     flyAnimRef.current = {
-      targetDir: normal,
-      targetUp,
+      targetLat,
+      targetLon,
       targetDist,
     };
-    setIsZoomedIn(true);
-    setIsLowOrbit(targetDist < 4.55);
   }, []);
 
-  // Fly back out to orbital overview showing Near Side + South Pole
-  const resetToGlobalView = useCallback(() => {
-    const targetDist = INITIAL_CAM_POS.length();
-    const targetDir = INITIAL_CAM_POS.clone().normalize();
-    const targetUp = computeUpForNormal(targetDir);
-
-    angVelRef.current = { x: 0, y: 0 };
-    targetCamDistRef.current = targetDist;
+  // Fly camera to Earth-facing Near Side centered on (0°N, 0°E) with North Up
+  const zoomToEarthSide = useCallback(() => {
+    angVelRef.current = { lat: 0, lon: 0 };
+    targetCamDistRef.current = INITIAL_CAM_DIST;
     flyAnimRef.current = {
-      targetDir,
-      targetUp,
-      targetDist,
+      targetLat: 0,
+      targetLon: 0,
+      targetDist: INITIAL_CAM_DIST,
     };
-    setIsZoomedIn(false);
-    setIsLowOrbit(false);
   }, []);
 
-  // Zoom directly over the Artemis South Pole cluster
+  // Zoom directly over the exact 90°S South Pole with North Up along 0° meridian
   const zoomToSouthPole = useCallback(() => {
-    const targetPos = new THREE.Vector3(0, -6.0, 0.4);
-    const targetDist = targetPos.length();
-    const targetDir = targetPos.clone().normalize();
-    const refUp = new THREE.Vector3(0, 0, 1);
-    const targetUp = refUp.addScaledVector(targetDir, -refUp.dot(targetDir)).normalize();
-
-    angVelRef.current = { x: 0, y: 0 };
+    const targetDist = 5.8;
+    angVelRef.current = { lat: 0, lon: 0 };
     targetCamDistRef.current = targetDist;
     flyAnimRef.current = {
-      targetDir,
-      targetUp,
+      targetLat: -90,
+      targetLon: 0,
       targetDist,
     };
-    setIsZoomedIn(true);
-    setIsLowOrbit(false);
   }, []);
 
-  // Setup Three.js Scene + Quaternion Virtual-Globe Camera Controller
+  // Setup Three.js Scene + Moon Trek North-Up Constrained-Axis Globe Controller
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
@@ -1073,16 +1201,17 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.copy(INITIAL_CAM_POS);
-    camera.up.copy(computeUpForNormal(INITIAL_CAM_POS));
-    camera.lookAt(0, 0, 0);
+    camLatRef.current = INITIAL_CAM_LAT;
+    camLonRef.current = INITIAL_CAM_LON;
+    camDistRef.current = INITIAL_CAM_DIST;
+    targetCamDistRef.current = INITIAL_CAM_DIST;
+
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1200);
+    applySelenographicCamera(camera, camLatRef.current, camLonRef.current, camDistRef.current);
     cameraRef.current = camera;
 
-    camDistRef.current = INITIAL_CAM_POS.length();
-    targetCamDistRef.current = INITIAL_CAM_POS.length();
-
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    renderer.setClearColor(0x020306, 1);
     renderer.setSize(width, height);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2.5));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1092,50 +1221,27 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Reusable scratch objects for zero-GC quaternion rotation & projection
-    const _tmpForward = new THREE.Vector3();
-    const _tmpRight = new THREE.Vector3();
-    const _tmpUp = new THREE.Vector3();
-    const _tmpRadial = new THREE.Vector3();
-    const _qYaw = new THREE.Quaternion();
-    const _qPitch = new THREE.Quaternion();
-    const _qDelta = new THREE.Quaternion();
-
-    const rotateCameraByScreenDelta = (cam: THREE.PerspectiveCamera, dYaw: number, dPitch: number) => {
-      const dist = camDistRef.current || INITIAL_CAM_POS.length();
-      _tmpForward.copy(cam.position).negate().normalize();
-      _tmpRight.crossVectors(_tmpForward, cam.up);
-      if (_tmpRight.lengthSq() < 1e-6) {
-        _tmpRight.set(1, 0, 0);
-      } else {
-        _tmpRight.normalize();
-      }
-      _tmpUp.crossVectors(_tmpRight, _tmpForward).normalize();
-
-      _qYaw.setFromAxisAngle(_tmpUp, -dYaw);
-      _qPitch.setFromAxisAngle(_tmpRight, -dPitch);
-      _qDelta.multiplyQuaternions(_qYaw, _qPitch);
-
-      cam.position.applyQuaternion(_qDelta).setLength(dist);
-      cam.up.copy(_tmpUp).applyQuaternion(_qDelta).normalize();
-      _tmpRadial.copy(cam.position).normalize();
-      cam.up.addScaledVector(_tmpRadial, -cam.up.dot(_tmpRadial)).normalize();
-      cam.lookAt(0, 0, 0);
-    };
-
-    // Monochrome lighting (crisp high-contrast solar light aligned to synodic ephemeris + minimal shadow fill)
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.06);
+    // Monochrome lighting (crisp high-contrast solar light aligned to synodic ephemeris; ambient starts OFF)
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.0);
     scene.add(ambientLight);
+    ambientLightRef.current = ambientLight;
 
     const { sunVec: initSunVec } = getSubsolarPoint(sunOffsetRef.current);
-    const dirLight = new THREE.DirectionalLight(0xffffff, 3.1);
-    dirLight.position.set(initSunVec.x * 16, initSunVec.y * 16, initSunVec.z * 16);
+    const { sunVec: initEarthVec } = getEarthPoint(sunOffsetRef.current);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 3.15);
+    dirLight.position.set(initSunVec.x * 260, initSunVec.y * 260, initSunVec.z * 260);
     scene.add(dirLight);
     dirLightRef.current = dirLight;
 
-    const earthshineLight = new THREE.DirectionalLight(0xd1d5db, 0.07);
-    earthshineLight.position.set(-10, -2, -5);
+    const celestialEnv = buildCelestialSpaceEnvironment(maxAniso);
+    celestialEnv.updateEphemeris(initSunVec, initEarthVec, sunOffsetRef.current);
+    scene.add(celestialEnv.rootGroup);
+    celestialEnvRef.current = celestialEnv;
+
+    const earthshineLight = new THREE.DirectionalLight(0xd1d5db, 0.02);
+    earthshineLight.position.set(-initSunVec.x * 12, -initSunVec.y * 12, -initSunVec.z * 12);
     scene.add(earthshineLight);
+    earthshineLightRef.current = earthshineLight;
 
     // 1. Unified Monochrome Lunar Base Sphere (LROC + Spherical Tangent LOLA + Feathered Polar Craters)
     const monoCanvas = document.createElement('canvas');
@@ -1266,6 +1372,161 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     };
     bumpImg.src = '/textures/lola_bump_2k.jpg';
 
+    // 2b. Selenographic Graticule: Lines of Longitude (Meridians) & Latitude Parallels
+    const graticuleGroup = new THREE.Group();
+    const gridR = MOON_RADIUS * 1.0032;
+
+    const meridianMatMajor = new THREE.LineBasicMaterial({
+      color: 0xe2e8f0,
+      transparent: true,
+      opacity: 0.34,
+      depthWrite: false,
+    });
+    const meridianMatPrime = new THREE.LineBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.50,
+      depthWrite: false,
+    });
+    const meridianMatMinor = new THREE.LineBasicMaterial({
+      color: 0xcbd5e1,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+    });
+    const equatorMat = new THREE.LineBasicMaterial({
+      color: 0xfef08a,
+      transparent: true,
+      opacity: 0.42,
+      depthWrite: false,
+    });
+    const parallelMat = new THREE.LineBasicMaterial({
+      color: 0xcbd5e1,
+      transparent: true,
+      opacity: 0.20,
+      depthWrite: false,
+    });
+    const poleRingMat = new THREE.LineBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.55,
+      depthWrite: false,
+    });
+
+    const graticuleGeometries: THREE.BufferGeometry[] = [];
+    for (let lon = -165; lon <= 180; lon += 15) {
+      const isPrimeOrAnti = lon === 0 || lon === 180;
+      const isMajor = lon % 30 === 0;
+      const latLimit = isMajor ? 89.5 : 80;
+      const pts: THREE.Vector3[] = [];
+      for (let lat = -latLimit; lat <= latLimit + 0.001; lat += 2.5) {
+        pts.push(latLonToVector3(Math.min(latLimit, lat), lon, gridR));
+      }
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      graticuleGeometries.push(geo);
+      const mat = isPrimeOrAnti ? meridianMatPrime : isMajor ? meridianMatMajor : meridianMatMinor;
+      const line = new THREE.Line(geo, mat);
+      line.raycast = () => { };
+      graticuleGroup.add(line);
+    }
+
+    const parallelLats = [-89.5, -80, -60, -30, 0, 30, 60, 80, 89.5];
+    for (const lat of parallelLats) {
+      const pts: THREE.Vector3[] = [];
+      for (let lon = -180; lon <= 180; lon += 3) {
+        pts.push(latLonToVector3(lat, lon, gridR));
+      }
+      const geo = new THREE.BufferGeometry().setFromPoints(pts);
+      graticuleGeometries.push(geo);
+      const mat =
+        lat === 0
+          ? equatorMat
+          : Math.abs(lat) > 89
+            ? poleRingMat
+            : parallelMat;
+      const line = new THREE.Line(geo, mat);
+      line.raycast = () => { };
+      graticuleGroup.add(line);
+    }
+
+    scene.add(graticuleGroup);
+    graticuleGroupRef.current = graticuleGroup;
+
+    // 2c. 3D Celestial Direction Indicators (SUN vector & EARTH DTE vector)
+    const celestialVectorsGroup = new THREE.Group();
+    const vectorUp = new THREE.Vector3(0, 1, 0);
+
+    const buildCelestialArrow = (
+      shaftColor: number,
+      headColor: number,
+      ringColor: number
+    ): {
+      group: THREE.Group;
+      geometries: THREE.BufferGeometry[];
+      materials: THREE.Material[];
+    } => {
+      const grp = new THREE.Group();
+      const shaftStart = MOON_RADIUS * 1.07;
+      const shaftLen = MOON_RADIUS * 0.34;
+      const shaftGeo = new THREE.CylinderGeometry(0.016, 0.016, shaftLen, 12);
+      const shaftMat = new THREE.MeshBasicMaterial({
+        color: shaftColor,
+        transparent: true,
+        opacity: 0.9,
+      });
+      const shaftMesh = new THREE.Mesh(shaftGeo, shaftMat);
+      shaftMesh.position.y = shaftStart + shaftLen * 0.5;
+      shaftMesh.raycast = () => { };
+      grp.add(shaftMesh);
+
+      const headLen = 0.17;
+      const headGeo = new THREE.ConeGeometry(0.062, headLen, 16);
+      const headMat = new THREE.MeshBasicMaterial({ color: headColor });
+      const headMesh = new THREE.Mesh(headGeo, headMat);
+      headMesh.position.y = shaftStart + shaftLen + headLen * 0.5;
+      headMesh.raycast = () => { };
+      grp.add(headMesh);
+
+      const collarGeo = new THREE.RingGeometry(0.048, 0.072, 24);
+      const collarMat = new THREE.MeshBasicMaterial({
+        color: ringColor,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.78,
+      });
+      const collarMesh = new THREE.Mesh(collarGeo, collarMat);
+      collarMesh.rotation.x = Math.PI / 2;
+      collarMesh.position.y = shaftStart;
+      collarMesh.raycast = () => { };
+      grp.add(collarMesh);
+
+      return {
+        group: grp,
+        geometries: [shaftGeo, headGeo, collarGeo],
+        materials: [shaftMat, headMat, collarMat],
+      };
+    };
+
+    const sunArrowBuilt = buildCelestialArrow(0xf59e0b, 0xfef08a, 0xfacc15);
+    const initSunDir = new THREE.Vector3(initSunVec.x, initSunVec.y, initSunVec.z).normalize();
+    sunArrowBuilt.group.quaternion.setFromUnitVectors(vectorUp, initSunDir);
+    celestialVectorsGroup.add(sunArrowBuilt.group);
+    sunArrowGroupRef.current = sunArrowBuilt.group;
+
+    const earthArrowBuilt = buildCelestialArrow(0x0ea5e9, 0x7dd3fc, 0x38bdf8);
+    const initEarthDir = new THREE.Vector3(
+      initEarthVec.x,
+      initEarthVec.y,
+      initEarthVec.z
+    ).normalize();
+    earthArrowBuilt.group.quaternion.setFromUnitVectors(vectorUp, initEarthDir);
+    celestialVectorsGroup.add(earthArrowBuilt.group);
+    earthArrowGroupRef.current = earthArrowBuilt.group;
+
+    celestialVectorsGroup.visible = showCelestialVectorsRef.current;
+    scene.add(celestialVectorsGroup);
+    celestialVectorsGroupRef.current = celestialVectorsGroup;
+
     // 3. Pickable 3D Hit Spheres & Static Selected Target Ring
     const pinsGroup = new THREE.Group();
     scene.add(pinsGroup);
@@ -1275,12 +1536,13 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     scene.add(landingZonesGroup);
     landingZonesGroupRef.current = landingZonesGroup;
 
-    // 4. Quaternion Pointer Drag + Scroll Zoom + Direct Surface Click Inspection
+    // 4. Moon Trek Constrained North-Up Pointer Pan (Left) + Zoom (Right Drag / Wheel) + Surface Probe Click
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
     let isPointerDown = false;
     let activePointerId: number | null = null;
+    let activeButton = 0;
     let didDrag = false;
     let downX = 0;
     let downY = 0;
@@ -1289,10 +1551,18 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     let lastHoverSiteId: string | null = null;
     let lastHoverCheck = 0;
 
+    const handleContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+    };
+
     const handlePointerDown = (event: PointerEvent) => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 && event.button !== 2) return;
+      if (event.button === 2) {
+        event.preventDefault();
+      }
       isPointerDown = true;
       activePointerId = event.pointerId;
+      activeButton = event.button;
       didDrag = false;
       downX = event.clientX;
       downY = event.clientY;
@@ -1300,8 +1570,12 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       lastY = event.clientY;
 
       flyAnimRef.current = null;
-      angVelRef.current = { x: 0, y: 0 };
-      renderer.domElement.style.cursor = isProbeModeRef.current ? 'crosshair' : 'grabbing';
+      angVelRef.current = { lat: 0, lon: 0 };
+      if (event.button === 2) {
+        renderer.domElement.style.cursor = 'ns-resize';
+      } else {
+        renderer.domElement.style.cursor = 'grabbing';
+      }
 
       try {
         renderer.domElement.setPointerCapture(event.pointerId);
@@ -1322,22 +1596,36 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         lastX = event.clientX;
         lastY = event.clientY;
 
-        const scale =
-          Math.max(0.055, (camDistRef.current - MOON_RADIUS * 0.96) / (MOON_RADIUS * 1.6)) * 0.0052;
-        const dYaw = dx * scale;
-        const dPitch = dy * scale;
-        rotateCameraByScreenDelta(camera, dYaw, dPitch);
-        angVelRef.current = { x: dYaw, y: dPitch };
-        return;
-      }
+        if (activeButton === 2) {
+          // Right-click + drag: Moon Trek / Cesium continuous zoom (drag down = zoom in, drag up = zoom out)
+          const factor = Math.max(0.75, Math.min(1.35, 1 - dy * 0.005));
+          const nextDist = Math.max(
+            MIN_CAM_DIST,
+            Math.min(MAX_CAM_DIST, targetCamDistRef.current * factor)
+          );
+          targetCamDistRef.current = nextDist;
+          camDistRef.current += (nextDist - camDistRef.current) * 0.5;
+          applySelenographicCamera(camera, camLatRef.current, camLonRef.current, camDistRef.current);
+          return;
+        }
 
-      if (isProbeModeRef.current) {
-        renderer.domElement.style.cursor = 'crosshair';
+        // Left-click + drag: Constrained North-Up selenographic pan
+        const scaleRad =
+          Math.max(0.055, (camDistRef.current - MOON_RADIUS * 0.96) / (MOON_RADIUS * 1.6)) * 0.0052;
+        const scaleDeg = scaleRad * RAD2DEG;
+        const cosLat = Math.max(0.25, Math.cos(camLatRef.current * DEG2RAD));
+        const dLat = dy * scaleDeg;
+        const dLon = -(dx * scaleDeg) / cosLat;
+
+        camLatRef.current = clampCamLat(camLatRef.current + dLat);
+        camLonRef.current = wrapLon(camLonRef.current + dLon);
+        applySelenographicCamera(camera, camLatRef.current, camLonRef.current, camDistRef.current);
+        angVelRef.current = { lat: dLat, lon: dLon };
         return;
       }
 
       const now = performance.now();
-      if (now - lastHoverCheck < 45) return;
+      if (now - lastHoverCheck < 50) return;
       lastHoverCheck = now;
 
       const rect = renderer.domElement.getBoundingClientRect();
@@ -1357,6 +1645,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
             lastHoverSiteId = hitSite.id;
             setHoveredSite(hitSite);
           }
+          setHoverCoords({
+            lat: hitSite.coordinates.latitude,
+            lon: hitSite.coordinates.longitude,
+          });
           renderer.domElement.style.cursor = 'pointer';
           return;
         }
@@ -1366,12 +1658,39 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         lastHoverSiteId = null;
         setHoveredSite(null);
       }
+
+      if (moonMeshRef.current) {
+        const moonHits = raycaster.intersectObject(moonMeshRef.current);
+        if (moonHits.length > 0) {
+          const localHit = moonMeshRef.current.worldToLocal(moonHits[0].point.clone());
+          const { latitude, longitude } = vector3ToLatLon(
+            localHit.x,
+            localHit.y,
+            localHit.z,
+            MOON_RADIUS
+          );
+          setHoverCoords({ lat: latitude, lon: longitude });
+          renderer.domElement.style.cursor = 'crosshair';
+          return;
+        }
+      }
+
+      setHoverCoords(null);
       renderer.domElement.style.cursor = 'grab';
+    };
+
+    const handlePointerLeave = () => {
+      setHoverCoords(null);
+      if (lastHoverSiteId !== null) {
+        lastHoverSiteId = null;
+        setHoveredSite(null);
+      }
     };
 
     const handlePointerUp = (event: PointerEvent) => {
       if (!isPointerDown) return;
       const wasDrag = didDrag;
+      const buttonReleased = activeButton;
       isPointerDown = false;
       if (activePointerId !== null) {
         try {
@@ -1381,32 +1700,31 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         }
         activePointerId = null;
       }
-      renderer.domElement.style.cursor = isProbeModeRef.current ? 'crosshair' : 'grab';
+      renderer.domElement.style.cursor = 'grab';
 
-      if (event.type === 'pointercancel' || wasDrag) {
+      if (event.type === 'pointercancel' || wasDrag || buttonReleased !== 0) {
         return;
       }
 
-      angVelRef.current = { x: 0, y: 0 };
+      angVelRef.current = { lat: 0, lon: 0 };
 
       const rect = renderer.domElement.getBoundingClientRect();
       mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(mouse, camera);
 
-      // 1. Check existing site pins first unless crosshair probe explicitly overrides
-      if (!isProbeModeRef.current) {
-        const pinHits = raycaster.intersectObjects(pinsGroup.children, true);
-        if (pinHits.length > 0) {
-          let obj: THREE.Object3D | null = pinHits[0].object;
-          while (obj && !obj.userData?.site) {
-            obj = obj.parent;
-          }
-          if (obj && obj.userData?.site) {
-            skipNextFlyRef.current = true;
-            onSelectSiteRef.current(obj.userData.site);
-            return;
-          }
+      // 1. Check existing site pins first
+      const pinHits = raycaster.intersectObjects(pinsGroup.children, true);
+      if (pinHits.length > 0) {
+        let obj: THREE.Object3D | null = pinHits[0].object;
+        while (obj && !obj.userData?.site) {
+          obj = obj.parent;
+        }
+        if (obj && obj.userData?.site) {
+          skipNextFlyRef.current = true;
+          setIsSiteCardVisible(true);
+          onSelectSiteRef.current(obj.userData.site);
+          return;
         }
       }
 
@@ -1423,6 +1741,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           );
           const sampled = sampleTerrainGrid(terrainGridRef.current, latitude, longitude);
           skipNextFlyRef.current = true;
+          setIsSiteCardVisible(true);
           if (onProbeCoordinateRef.current) {
             onProbeCoordinateRef.current(
               latitude,
@@ -1431,9 +1750,6 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
               sampled.slopeDeg,
               sampled.elevM
             );
-          }
-          if (isProbeModeRef.current) {
-            setIsProbeMode(false);
           }
         }
       }
@@ -1448,12 +1764,12 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         Math.min(MAX_CAM_DIST, targetCamDistRef.current * factor)
       );
       targetCamDistRef.current = nextDist;
-      setIsZoomedIn(nextDist < 7.2);
-      setIsLowOrbit(nextDist < 4.55);
     };
 
+    renderer.domElement.addEventListener('contextmenu', handleContextMenu);
     renderer.domElement.addEventListener('pointerdown', handlePointerDown);
     renderer.domElement.addEventListener('pointermove', handlePointerMove);
+    renderer.domElement.addEventListener('pointerleave', handlePointerLeave);
     renderer.domElement.addEventListener('pointerup', handlePointerUp);
     renderer.domElement.addEventListener('pointercancel', handlePointerUp);
     renderer.domElement.addEventListener('wheel', handleWheel, { passive: false });
@@ -1474,7 +1790,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     });
     resizeObserver.observe(container);
 
-    // 6. Imperative 60fps DOM Projection for Telemetry Markers & Non-Overlapping Leader Lines
+    // 6. Imperative 60fps DOM Projection for Telemetry Markers, Non-Overlapping Leader Lines & Graticule Labels
     const camToSite = new THREE.Vector3();
     const worldPos = new THREE.Vector3();
     const surfaceNormal = new THREE.Vector3();
@@ -1503,8 +1819,10 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
 
       const visiblePins: PinLayout[] = [];
       const visibleIds = new Set<string>();
+      const artemisVisible = showArtemisSitesRef.current;
 
       for (const site of currentSites) {
+        if (!site.id.startsWith('custom') && !artemisVisible) continue;
         const localPos = latLonToVector3(
           site.coordinates.latitude,
           site.coordinates.longitude,
@@ -1602,63 +1920,163 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         if (labelEl) labelEl.style.display = 'none';
         if (lineEl) lineEl.style.display = 'none';
       }
+
+      // Project North/South Pole indicators, meridian longitude labels, and latitude parallel labels
+      const gridVisible = showGridRef.current;
+      const projectGraticuleLabel = (
+        id: string,
+        latDeg: number,
+        lonDeg: number,
+        minDot: number,
+        offsetYCss = '-50%'
+      ) => {
+        const el = graticuleLabelElsRef.current.get(id);
+        if (!el) return;
+        if (!gridVisible) {
+          el.style.display = 'none';
+          return;
+        }
+        const pos = latLonToVector3(latDeg, lonDeg, MOON_RADIUS * 1.005);
+        worldPos.copy(pos).applyEuler(moonMesh.rotation);
+        surfaceNormal.copy(worldPos).normalize();
+        camToSite.copy(camera.position).sub(worldPos).normalize();
+
+        if (surfaceNormal.dot(camToSite) <= minDot) {
+          el.style.display = 'none';
+          return;
+        }
+        ndc.copy(worldPos).project(camera);
+        if (ndc.z > 1) {
+          el.style.display = 'none';
+          return;
+        }
+        const sx = (ndc.x * 0.5 + 0.5) * w;
+        const sy = (-ndc.y * 0.5 + 0.5) * h;
+
+        const inBottomLeftHud = sx < safeLeft + 348 && sy > h - 248;
+        if (
+          inBottomLeftHud ||
+          sx < safeLeft + 24 ||
+          sx > safeRight - 24 ||
+          sy < safeTop + 14 ||
+          sy > safeBottom - 14
+        ) {
+          el.style.display = 'none';
+          return;
+        }
+        el.style.display = 'inline-flex';
+        el.style.transform = `translate3d(${sx.toFixed(1)}px, ${sy.toFixed(1)}px, 0) translate(-50%, ${offsetYCss})`;
+      };
+
+      for (const pole of GRATICULE_POLES) {
+        const offsetCss = pole.lat > 0 ? 'calc(-50% - 22px)' : 'calc(-50% + 52px)';
+        projectGraticuleLabel(pole.id, pole.lat, pole.lon, 0.04, offsetCss);
+      }
+
+      const meridianLabelLat = Math.max(-76, Math.min(76, camLatRef.current));
+      for (const m of GRATICULE_MERIDIANS) {
+        projectGraticuleLabel(m.id, meridianLabelLat, m.lon, 0.24);
+      }
+
+      const parallelLabelLon = wrapLon(camLonRef.current - 16);
+      for (const par of GRATICULE_PARALLELS) {
+        projectGraticuleLabel(par.id, par.lat, parallelLabelLon, 0.20);
+      }
+
+      // Project 3D Sun & Earth Vector Direction Labels at their orbital arrow tips
+      const projectCelestialTipLabel = (
+        el: HTMLDivElement | null,
+        dirUnit: { x: number; y: number; z: number }
+      ) => {
+        if (!el) return;
+        if (!showCelestialVectorsRef.current) {
+          el.style.display = 'none';
+          return;
+        }
+        const tipDist = MOON_RADIUS * 1.62;
+        worldPos.set(dirUnit.x * tipDist, dirUnit.y * tipDist, dirUnit.z * tipDist);
+        ndc.copy(worldPos).project(camera);
+        if (ndc.z > 1) {
+          el.style.display = 'none';
+          return;
+        }
+        const sx = (ndc.x * 0.5 + 0.5) * w;
+        const sy = (-ndc.y * 0.5 + 0.5) * h;
+        if (sx < safeLeft + 18 || sx > safeRight - 18 || sy < safeTop + 12 || sy > safeBottom - 12) {
+          el.style.display = 'none';
+          return;
+        }
+
+        const rayDir = worldPos.clone().sub(camera.position);
+        const rayLen = rayDir.length();
+        rayDir.divideScalar(Math.max(1e-5, rayLen));
+        const tClosest = -camera.position.dot(rayDir);
+        const dMinSq = camera.position.lengthSq() - tClosest * tClosest;
+        const occludedBehindMoon =
+          tClosest > 0 && tClosest < rayLen && dMinSq < MOON_RADIUS * MOON_RADIUS * 0.96;
+
+        el.style.display = 'inline-flex';
+        el.style.opacity = occludedBehindMoon ? '0.4' : '1';
+        el.style.transform = `translate3d(${sx.toFixed(1)}px, ${sy.toFixed(1)}px, 0) translate(-50%, -50%)`;
+      };
+
+      const { sunVec: curSunVec } = getSubsolarPoint(sunOffsetRef.current);
+      const { sunVec: curEarthVec } = getEarthPoint(sunOffsetRef.current);
+      projectCelestialTipLabel(sunVectorLabelRef.current, curSunVec);
+      projectCelestialTipLabel(earthVectorLabelRef.current, curEarthVec);
     };
     projectPinsNowRef.current = updateProjectedPinsDOM;
 
-    // 7. Render Loop (60fps zero-React-rerender quaternion orbit + zoom damping)
+    // 7. Render Loop (60fps zero-React-rerender Moon Trek North-Up spherical pan + zoom damping)
     let animId: number;
-    const _curDir = new THREE.Vector3();
-    const _radNorm = new THREE.Vector3();
 
     const animate = () => {
       animId = requestAnimationFrame(animate);
+      let cameraUpdated = false;
 
       const fly = flyAnimRef.current;
       if (fly) {
-        _curDir.copy(camera.position).normalize();
-        _curDir.lerp(fly.targetDir, 0.08).normalize();
-        camDistRef.current += (fly.targetDist - camDistRef.current) * 0.08;
-        camera.position.copy(_curDir).multiplyScalar(camDistRef.current);
-
-        camera.up.lerp(fly.targetUp, 0.08).normalize();
-        _radNorm.copy(camera.position).normalize();
-        camera.up.addScaledVector(_radNorm, -camera.up.dot(_radNorm)).normalize();
-        camera.lookAt(0, 0, 0);
+        camLatRef.current += (fly.targetLat - camLatRef.current) * 0.09;
+        let dLon = fly.targetLon - camLonRef.current;
+        while (dLon > 180) dLon -= 360;
+        while (dLon < -180) dLon += 360;
+        camLonRef.current = wrapLon(camLonRef.current + dLon * 0.09);
+        camDistRef.current += (fly.targetDist - camDistRef.current) * 0.09;
 
         if (
-          _curDir.distanceTo(fly.targetDir) < 0.008 &&
-          Math.abs(camDistRef.current - fly.targetDist) < 0.02
+          Math.abs(fly.targetLat - camLatRef.current) < 0.05 &&
+          Math.abs(dLon) < 0.05 &&
+          Math.abs(fly.targetDist - camDistRef.current) < 0.015
         ) {
-          camera.position.copy(fly.targetDir).multiplyScalar(fly.targetDist);
-          camera.up.copy(fly.targetUp);
-          camera.lookAt(0, 0, 0);
+          camLatRef.current = clampCamLat(fly.targetLat);
+          camLonRef.current = wrapLon(fly.targetLon);
           camDistRef.current = fly.targetDist;
           flyAnimRef.current = null;
         }
+        cameraUpdated = true;
       } else {
-        // Smooth wheel zoom interpolation
+        // Smooth wheel & right-drag zoom interpolation
         if (Math.abs(targetCamDistRef.current - camDistRef.current) > 0.002) {
           camDistRef.current += (targetCamDistRef.current - camDistRef.current) * 0.14;
-          camera.position.setLength(camDistRef.current);
+          cameraUpdated = true;
         }
 
         // Smooth drag momentum damping after mouse release
         if (!isPointerDown) {
-          const vx = angVelRef.current.x;
-          const vy = angVelRef.current.y;
-          if (Math.abs(vx) > 1e-5 || Math.abs(vy) > 1e-5) {
-            rotateCameraByScreenDelta(camera, vx, vy);
-            angVelRef.current.x = vx * 0.90;
-            angVelRef.current.y = vy * 0.90;
+          const vLat = angVelRef.current.lat;
+          const vLon = angVelRef.current.lon;
+          if (Math.abs(vLat) > 1e-4 || Math.abs(vLon) > 1e-4) {
+            camLatRef.current = clampCamLat(camLatRef.current + vLat);
+            camLonRef.current = wrapLon(camLonRef.current + vLon);
+            angVelRef.current.lat = vLat * 0.88;
+            angVelRef.current.lon = vLon * 0.88;
+            cameraUpdated = true;
           }
         }
       }
 
-      if (autoRotateRef.current && !flyAnimRef.current && !isPointerDown) {
-        moonMesh.rotation.y += 0.0018;
-        overlayMesh.rotation.y += 0.0018;
-        pinsGroup.rotation.y += 0.0018;
-        landingZonesGroup.rotation.y += 0.0018;
+      if (cameraUpdated) {
+        applySelenographicCamera(camera, camLatRef.current, camLonRef.current, camDistRef.current);
       }
 
       renderer.render(scene, camera);
@@ -1673,12 +2091,27 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
       if (renderer.domElement) {
+        renderer.domElement.removeEventListener('contextmenu', handleContextMenu);
         renderer.domElement.removeEventListener('pointerdown', handlePointerDown);
         renderer.domElement.removeEventListener('pointermove', handlePointerMove);
+        renderer.domElement.removeEventListener('pointerleave', handlePointerLeave);
         renderer.domElement.removeEventListener('pointerup', handlePointerUp);
         renderer.domElement.removeEventListener('pointercancel', handlePointerUp);
         renderer.domElement.removeEventListener('wheel', handleWheel);
       }
+      graticuleGeometries.forEach((g) => g.dispose());
+      meridianMatMajor.dispose();
+      meridianMatPrime.dispose();
+      meridianMatMinor.dispose();
+      equatorMat.dispose();
+      parallelMat.dispose();
+      poleRingMat.dispose();
+      sunArrowBuilt.geometries.forEach((g) => g.dispose());
+      sunArrowBuilt.materials.forEach((m) => m.dispose());
+      earthArrowBuilt.geometries.forEach((g) => g.dispose());
+      earthArrowBuilt.materials.forEach((m) => m.dispose());
+      celestialEnv.dispose();
+      celestialEnvRef.current = null;
       monoTexture.dispose();
       normalTexture.dispose();
       overlayTexture.dispose();
@@ -1686,6 +2119,42 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
       container.innerHTML = '';
     };
   }, []); // Run once on mount
+
+  // Sync Ambient Light toggle & shadow lift slider (OFF by default for crisp day/night terminator contrast)
+  useEffect(() => {
+    const activePct = ambientLightEnabled ? ambientLightPct : 0;
+    const t = activePct / 100;
+    if (ambientLightRef.current) {
+      ambientLightRef.current.intensity = activePct > 0 ? 0.06 + t * 1.7 : 0.0;
+    }
+    if (earthshineLightRef.current) {
+      earthshineLightRef.current.intensity = activePct > 0 ? 0.07 + t * 0.65 : 0.02;
+    }
+  }, [ambientLightEnabled, ambientLightPct]);
+
+  // Toggle 3D Grid (Meridians & Parallels + Labels)
+  useEffect(() => {
+    if (graticuleGroupRef.current) {
+      graticuleGroupRef.current.visible = showGrid;
+    }
+    projectPinsNowRef.current?.();
+  }, [showGrid]);
+
+  // Toggle 3D Celestial Direction Vectors
+  useEffect(() => {
+    if (celestialVectorsGroupRef.current) {
+      celestialVectorsGroupRef.current.visible = showCelestialVectors;
+    }
+    projectPinsNowRef.current?.();
+  }, [showCelestialVectors]);
+
+  // Toggle NASA Artemis Candidate Site Pins & Labels on Globe
+  useEffect(() => {
+    if (!showArtemisSites) {
+      setHoveredSite((prev) => (prev && !prev.id.startsWith('custom') ? null : prev));
+    }
+    projectPinsNowRef.current?.();
+  }, [showArtemisSites]);
 
   // Sync Overlay visibility & smooth opacity
   useEffect(() => {
@@ -1717,11 +2186,28 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     );
   }, [lander, sunIlluminationOffset, canonicalSitesSignature]);
 
-  // Align 3D Sunlight Terminator Vector identically with ephemeris model & RYG shadows
+  // Align 3D Sunlight Terminator Vector, Opposite Fill Light & Sun/Earth 3D Arrows identically with ephemeris model
   useEffect(() => {
-    if (!dirLightRef.current) return;
     const { sunVec } = getSubsolarPoint(sunIlluminationOffset);
-    dirLightRef.current.position.set(sunVec.x * 16, sunVec.y * 16, sunVec.z * 16);
+    const { sunVec: earthVec } = getEarthPoint(sunIlluminationOffset);
+    const up = new THREE.Vector3(0, 1, 0);
+
+    if (dirLightRef.current) {
+      dirLightRef.current.position.set(sunVec.x * 260, sunVec.y * 260, sunVec.z * 260);
+    }
+    celestialEnvRef.current?.updateEphemeris(sunVec, earthVec, sunIlluminationOffset);
+    if (earthshineLightRef.current) {
+      earthshineLightRef.current.position.set(-sunVec.x * 12, -sunVec.y * 12, -sunVec.z * 12);
+    }
+    if (sunArrowGroupRef.current) {
+      const sunDir = new THREE.Vector3(sunVec.x, sunVec.y, sunVec.z).normalize();
+      sunArrowGroupRef.current.quaternion.setFromUnitVectors(up, sunDir);
+    }
+    if (earthArrowGroupRef.current) {
+      const earthDir = new THREE.Vector3(earthVec.x, earthVec.y, earthVec.z).normalize();
+      earthArrowGroupRef.current.quaternion.setFromUnitVectors(up, earthDir);
+    }
+    projectPinsNowRef.current?.();
   }, [sunIlluminationOffset]);
 
   // Rebuild pick spheres & single static thin ring around ONLY the selected site
@@ -1738,6 +2224,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
     }
 
     sites.forEach((site) => {
+      if (!site.id.startsWith('custom') && !showArtemisSites) return;
       const isSelected = site.id === selectedSite.id;
       const pos = latLonToVector3(
         site.coordinates.latitude,
@@ -1768,12 +2255,12 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         landingZonesGroup.add(ringMesh);
       }
     });
-  }, [sites, selectedSite]);
+  }, [sites, selectedSite, showArtemisSites]);
 
   // Ensure newly mounted or re-rendered pin nodes position immediately
   useEffect(() => {
     projectPinsNowRef.current?.();
-  }, [sites, selectedSite, siteMetricsMap, leftDrawerOpen, rightDrawerOpen]);
+  }, [sites, selectedSite, siteMetricsMap, leftDrawerOpen, rightDrawerOpen, showArtemisSites]);
 
   // Fly camera on programmatic selection changes (drawer / COORDS popover); keep steady on direct surface click
   useEffect(() => {
@@ -1803,14 +2290,106 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
   const hoveredMetric = hoveredSite ? siteMetricsMap.get(hoveredSite.id) : null;
   const maxSlopeLimit = lander ? lander.maxSlopeDeg : 15;
   const minIllumLimit = lander ? lander.minIlluminationPct : 70;
+  const subsolarPoint = useMemo(
+    () => getSubsolarPoint(sunIlluminationOffset),
+    [sunIlluminationOffset]
+  );
+  const earthSubPoint = useMemo(
+    () => getEarthPoint(sunIlluminationOffset),
+    [sunIlluminationOffset]
+  );
+  const artemisSites = useMemo(
+    () => sites.filter((s) => !s.id.startsWith('custom')),
+    [sites]
+  );
+  const customSites = useMemo(
+    () => sites.filter((s) => s.id.startsWith('custom')),
+    [sites]
+  );
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-black flex flex-col">
       {/* 3D WebGL Canvas Mount Container */}
       <div ref={mountRef} className="w-full h-full flex-1 cursor-grab active:cursor-grabbing" />
 
-      {/* Projected Screen-Space SpaceX Telemetry Markers (Imperatively positioned at 60fps) */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden z-10">
+      {/* Projected Screen-Space SpaceX Telemetry Markers & Graticule Labels (Imperatively positioned at 60fps) */}
+      <div className="pointer-events-none absolute inset-0 overflow-hidden z-10 select-none">
+        {/* Projected North / South Pole, Longitude Meridian & Latitude Parallel Labels */}
+        {GRATICULE_POLES.map((pole) => (
+          <span
+            key={pole.id}
+            ref={(el) => {
+              if (el) graticuleLabelElsRef.current.set(pole.id, el);
+              else graticuleLabelElsRef.current.delete(pole.id);
+            }}
+            style={{ display: 'none' }}
+            className="pointer-events-none absolute top-0 left-0 items-center px-1.5 py-0.5 rounded-[2px] bg-[#090A0D]/85 border border-sky-400/55 font-mono text-[9px] font-bold tracking-wider text-sky-300 whitespace-nowrap"
+          >
+            {pole.text}
+          </span>
+        ))}
+        {GRATICULE_MERIDIANS.map((m) => (
+          <span
+            key={m.id}
+            ref={(el) => {
+              if (el) graticuleLabelElsRef.current.set(m.id, el);
+              else graticuleLabelElsRef.current.delete(m.id);
+            }}
+            style={{ display: 'none' }}
+            className={`pointer-events-none absolute top-0 left-0 items-center px-1 py-[1px] rounded-[2px] font-mono text-[8px] tracking-wider whitespace-nowrap border ${m.isPrime
+              ? 'bg-[#090A0D]/75 border-sky-400/35 text-sky-300 font-semibold'
+              : 'bg-[#090A0D]/55 border-white/[0.10] text-slate-200/80'
+              }`}
+          >
+            {m.text}
+          </span>
+        ))}
+        {GRATICULE_PARALLELS.map((par) => (
+          <span
+            key={par.id}
+            ref={(el) => {
+              if (el) graticuleLabelElsRef.current.set(par.id, el);
+              else graticuleLabelElsRef.current.delete(par.id);
+            }}
+            style={{ display: 'none' }}
+            className={`pointer-events-none absolute top-0 left-0 items-center px-1 py-[1px] rounded-[2px] font-mono text-[8px] tracking-wider whitespace-nowrap border ${par.isEquator
+              ? 'bg-[#090A0D]/75 border-amber-300/35 text-amber-200 font-semibold'
+              : 'bg-[#090A0D]/55 border-white/[0.10] text-slate-300/75'
+              }`}
+          >
+            {par.text}
+          </span>
+        ))}
+
+        {/* Projected 3D Sun & Earth Vector Tip Badges */}
+        <div
+          ref={sunVectorLabelRef}
+          style={{ display: 'none' }}
+          className="pointer-events-none absolute top-0 left-0 items-center gap-1.5 px-2 py-0.5 rounded-[2px] bg-[#090A0D]/90 border border-amber-400/60 font-mono text-[9px] uppercase tracking-wider text-amber-200 whitespace-nowrap"
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-300 shrink-0" />
+          <span className="font-bold">SUN VECTOR</span>
+          <span className="text-amber-200/75 tabular-nums">
+            {subsolarPoint.latDeg >= 0 ? '+' : ''}
+            {subsolarPoint.latDeg.toFixed(1)}°, {subsolarPoint.lonDeg >= 0 ? '+' : ''}
+            {subsolarPoint.lonDeg.toFixed(1)}°
+          </span>
+        </div>
+
+        <div
+          ref={earthVectorLabelRef}
+          style={{ display: 'none' }}
+          className="pointer-events-none absolute top-0 left-0 items-center gap-1.5 px-2 py-0.5 rounded-[2px] bg-[#090A0D]/90 border border-sky-400/60 font-mono text-[9px] uppercase tracking-wider text-sky-200 whitespace-nowrap"
+        >
+          <span className="w-1.5 h-1.5 rounded-full bg-sky-400 shrink-0" />
+          <span className="font-bold">EARTH · DTE</span>
+          <span className="text-sky-200/75 tabular-nums">
+            {earthSubPoint.latDeg >= 0 ? '+' : ''}
+            {earthSubPoint.latDeg.toFixed(1)}°, {earthSubPoint.lonDeg >= 0 ? '+' : ''}
+            {earthSubPoint.lonDeg.toFixed(1)}°
+          </span>
+        </div>
+
         {/* SVG Leader Lines */}
         <svg className="absolute inset-0 w-full h-full">
           {sites.map((site) => {
@@ -1907,26 +2486,404 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         })}
       </div>
 
-      {/* Top HUD: View Mode, Floating Overlay Control Pill, Camera Actions */}
+      {/* Top HUD: Viewport Mode & NASA Artemis Sites, Floating Overlay/Ambient Light Pill, Camera & Layer Actions */}
       <div
-        className={`absolute top-3 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} ${rightDrawerOpen ? 'lg:right-[512px] right-3' : 'right-3'} flex flex-wrap items-center justify-between gap-2 pointer-events-none z-20 transition-all duration-300`}
+        className={`absolute top-3 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} ${!rightDrawerOpen ? 'right-3' : rightDrawerWide ? 'lg:right-[752px] 2xl:right-[852px] right-3' : 'lg:right-[512px] right-3'} ${leftDrawerOpen && rightDrawerWide ? 'hidden 2xl:flex' : 'flex'} flex-wrap items-center justify-between gap-2 pointer-events-none z-20 transition-all duration-300`}
       >
-        {/* Left: View Mode Readout */}
-        <div className="pointer-events-auto flex items-center gap-2 bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF]">
-          <Compass className="w-3.5 h-3.5 text-white" />
-          <span>
-            VIEW //{' '}
-            <span className="text-white font-semibold">
-              {isLowOrbit
-                ? 'LOW ORBIT INSPECTION'
-                : isZoomedIn
-                  ? 'DESCENT INSPECTION'
-                  : 'ORBITAL OVERVIEW'}
-            </span>
-          </span>
+        {/* Left: Seamless 3D Globe <-> 3D Surface Patch Switcher & NASA Artemis Candidate Sites (9) */}
+        <div className="pointer-events-auto flex flex-wrap items-center gap-2">
+          <div
+            className="flex items-center rounded-[2px] bg-[#090A0D]/95 border border-white/[0.14] p-0.5 font-mono text-[10px] uppercase tracking-wider"
+            role="group"
+            aria-label="Viewport Mode"
+          >
+            <button
+              type="button"
+              onClick={() => setIsLocalSurfaceOpen(false)}
+              aria-pressed={!isLocalSurfaceOpen}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[2px] transition ${!isLocalSurfaceOpen
+                ? 'bg-white text-black font-bold'
+                : 'text-[#9CA3AF] hover:text-white'
+                }`}
+            >
+              <Globe className="w-3 h-3" />
+              <span>3D Moon Globe</span>
+            </button>
+            <button
+              type="button"
+              data-testid="open-local-surface-top-btn"
+              onClick={() => setIsLocalSurfaceOpen(true)}
+              aria-pressed={isLocalSurfaceOpen}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-[2px] transition ${isLocalSurfaceOpen
+                ? 'bg-white text-black font-bold'
+                : 'text-[#9CA3AF] hover:text-white'
+                }`}
+              title="Switch to 2.4 km × 2.4 km high-resolution 3D local surface DEM & boulder hazard patch"
+            >
+              <Layers className="w-3 h-3" />
+              <span>3D Surface Patch</span>
+            </button>
+          </div>
+
+          {/* NASA Artemis Candidate Sites Dropdown + ON/OFF Toggle + Hover Provenance "i" Button */}
+          <div ref={artemisMenuRef} className="relative flex items-center gap-1">
+            <div className="flex items-center rounded-[2px] bg-[#090A0D]/95 border border-white/[0.14]">
+              <button
+                type="button"
+                data-testid="artemis-sites-dropdown-btn"
+                onClick={() => setIsArtemisDropdownOpen((prev) => !prev)}
+                aria-expanded={isArtemisDropdownOpen}
+                className={`flex items-center gap-2 px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-wider transition ${isArtemisDropdownOpen
+                  ? 'bg-[#12141A] text-white'
+                  : 'text-white hover:bg-[#12141A]/70'
+                  }`}
+              >
+                <span
+                  style={{
+                    backgroundColor: showArtemisSites
+                      ? statusHex(selectedRiskTelemetry.risk.overall_status)
+                      : '#4B5563',
+                  }}
+                  className="w-2 h-2 rounded-full border border-white/70 shrink-0"
+                />
+                <span className={`font-semibold ${showArtemisSites ? 'text-white' : 'text-[#9CA3AF]'}`}>
+                  NASA Artemis Candidate Sites ({artemisSites.length})
+                </span>
+                <ChevronDown
+                  className={`w-3.5 h-3.5 text-[#9CA3AF] transition-transform ${isArtemisDropdownOpen ? 'rotate-180' : ''
+                    }`}
+                />
+              </button>
+
+              <div className="h-3.5 w-px bg-white/[0.14]" />
+
+              <button
+                type="button"
+                data-testid="artemis-sites-toggle-btn"
+                onClick={() => setShowArtemisSites((prev) => !prev)}
+                aria-pressed={showArtemisSites}
+                aria-label="Toggle NASA Artemis candidate sites visibility on 3D globe"
+                title="Toggle NASA Artemis candidate landing sites on/off on the 3D Moon"
+                className="px-2 py-1 font-mono text-[10px] uppercase tracking-wider hover:bg-[#12141A]/70 transition flex items-center"
+              >
+                <span
+                  className={`px-1.5 py-0.5 rounded-[2px] border font-bold ${showArtemisSites
+                    ? 'bg-white text-black border-white'
+                    : 'bg-[#12141A] text-[#9CA3AF] border-white/[0.14]'
+                    }`}
+                >
+                  {showArtemisSites ? 'ON' : 'OFF'}
+                </span>
+              </button>
+            </div>
+
+            <div
+              className="relative"
+              onMouseEnter={() => setIsArtemisInfoHovered(true)}
+              onMouseLeave={() => setIsArtemisInfoHovered(false)}
+            >
+              <button
+                type="button"
+                data-testid="artemis-info-hover-btn"
+                aria-label="NASA Artemis Candidate Sites Information"
+                onFocus={() => setIsArtemisInfoHovered(true)}
+                onBlur={() => setIsArtemisInfoHovered(false)}
+                className={`flex items-center justify-center w-7 h-7 rounded-[2px] border transition ${isArtemisInfoHovered
+                  ? 'bg-white text-black border-white'
+                  : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/40'
+                  }`}
+              >
+                <Info className="w-3.5 h-3.5" />
+              </button>
+
+              {isArtemisInfoHovered && (
+                <div
+                  data-testid="artemis-info-popover"
+                  className="absolute right-0 top-full pt-2 w-[450px] max-w-[92vw] z-40"
+                >
+                  <div className="bg-[#090A0D]/95 backdrop-blur-xl border border-white/25 rounded-[2px] p-3.5 font-mono text-[10px] text-[#D1D5DB] space-y-2.5 shadow-2xl">
+                    <div className="border-b border-white/[0.12] pb-2">
+                      <div className="text-[11px] font-bold text-white uppercase tracking-wider">
+                        The 9 Candidate Lunar Landing Regions
+                      </div>
+                      <div className="text-[9px] text-[#9CA3AF] mt-0.5">
+                        NASA Shortlist Finalized October 28, 2024 · Lunar South Pole
+                      </div>
+                    </div>
+
+                    <p className="text-[10px] leading-relaxed text-[#9CA3AF] font-sans">
+                      Each region spans several kilometers and offers at least{' '}
+                      <span className="text-white font-semibold">6.5 Earth days</span> of
+                      near-continuous sunlight along with walking access to shadowed ice deposits.
+                    </p>
+
+                    <div className="border border-white/[0.12] rounded-[2px] overflow-hidden">
+                      <table className="w-full text-left border-collapse text-[9px]">
+                        <thead>
+                          <tr className="bg-[#12141A] text-[#9CA3AF] uppercase tracking-wider border-b border-white/[0.12]">
+                            <th className="py-1.5 px-2 font-semibold">Candidate Region</th>
+                            <th className="py-1.5 px-2 font-semibold">Approx. Coords</th>
+                            <th className="py-1.5 px-2 font-semibold">Selection Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {artemisSites.map((s, idx) => (
+                            <tr
+                              key={s.id}
+                              className="border-b last:border-b-0 border-white/[0.06] bg-black/40"
+                            >
+                              <td className="py-1 px-2 text-white font-semibold">
+                                {idx + 1}. {s.name}
+                              </td>
+                              <td className="py-1 px-2 text-[#9CA3AF] tabular-nums">
+                                {Math.abs(s.coordinates.latitude).toFixed(2)}°
+                                {s.coordinates.latitude >= 0 ? 'N' : 'S'},{' '}
+                                {Math.abs(s.coordinates.longitude).toFixed(2)}°
+                                {s.coordinates.longitude >= 0 ? 'E' : 'W'}
+                              </td>
+                              <td className="py-1 px-2">
+                                <span
+                                  className={
+                                    s.selectionStatus === 'Added in 2024'
+                                      ? 'text-sky-300'
+                                      : 'text-[#9CA3AF]'
+                                  }
+                                >
+                                  {s.selectionStatus || 'Retained from 2022'}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-white/[0.10] text-[9px] uppercase tracking-wider">
+                      <a
+                        href="https://www.lpi.usra.edu/lunar/lunar-south-pole-atlas/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-sky-300 hover:text-sky-200 underline underline-offset-2"
+                      >
+                        <span>LPI South Pole Atlas</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                      <a
+                        href="https://www.nasa.gov/news-release/nasa-identifies-candidate-regions-for-landing-next-americans-on-moon/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-sky-300 hover:text-sky-200 underline underline-offset-2"
+                      >
+                        <span>NASA 2024 Release</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                      <a
+                        href="https://www.nasa.gov/mission/artemis-iv/"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-sky-300 hover:text-sky-200 underline underline-offset-2"
+                      >
+                        <span>NASA Artemis IV Page</span>
+                        <ExternalLink className="w-2.5 h-2.5" />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {isArtemisDropdownOpen && (
+              <div
+                data-testid="artemis-sites-menu"
+                className="absolute left-0 top-full mt-2 w-[360px] max-w-[92vw] max-h-[65vh] overflow-y-auto bg-[#090A0D]/95 backdrop-blur-xl border border-white/25 rounded-[2px] p-2 space-y-1 z-40 font-mono"
+              >
+                <div className="px-2 py-1 border-b border-white/[0.10] flex items-center justify-between gap-2 text-[9px] uppercase tracking-widest text-[#6B7280]">
+                  <span>NASA Artemis III+ Shortlist</span>
+                  <button
+                    type="button"
+                    data-testid="artemis-dropdown-visibility-toggle"
+                    onClick={() => setShowArtemisSites((prev) => !prev)}
+                    aria-pressed={showArtemisSites}
+                    className="flex items-center gap-1 text-[9px] font-mono uppercase tracking-wider hover:text-white transition"
+                  >
+                    <span>Show Markers:</span>
+                    <span
+                      className={`px-1 py-[1px] rounded-[2px] border font-bold ${showArtemisSites
+                        ? 'bg-white text-black border-white'
+                        : 'bg-[#12141A] text-[#9CA3AF] border-white/[0.14]'
+                        }`}
+                    >
+                      {showArtemisSites ? 'ON' : 'OFF'}
+                    </span>
+                  </button>
+                </div>
+                {artemisSites.map((site, idx) => {
+                  const metric = siteMetricsMap.get(site.id);
+                  const status = metric?.status ?? 'GREEN';
+                  const illumPct = metric?.illumPct ?? site.defaultIlluminationPct;
+                  const isSelected = site.id === selectedSite.id;
+                  const isCompared = compareSiteIds.includes(site.id);
+                  const compareQueueFull = !isCompared && compareSiteIds.length >= 3;
+                  return (
+                    <div key={site.id} className="flex items-stretch gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowArtemisSites(true);
+                          onSelectSite(site);
+                          setIsArtemisDropdownOpen(false);
+                        }}
+                        className={`flex-1 min-w-0 text-left px-2.5 py-2 rounded-[2px] border transition flex items-center justify-between gap-2 ${isSelected
+                          ? 'bg-[#12141A] border-white/60 text-white'
+                          : 'bg-black/60 border-white/[0.08] text-[#D1D5DB] hover:border-white/30 hover:bg-[#12141A]'
+                          }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-[#6B7280] tabular-nums">{idx + 1}.</span>
+                            <span className="text-[11px] font-bold text-white truncate">
+                              {site.name}
+                            </span>
+                            {site.selectionStatus === 'Added in 2024' && (
+                              <span className="px-1 py-[1px] rounded-[2px] bg-sky-500/15 border border-sky-400/35 text-[8px] text-sky-300 uppercase shrink-0">
+                                2024
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[9px] text-[#9CA3AF] tabular-nums mt-0.5">
+                            {Math.abs(site.coordinates.latitude).toFixed(2)}°
+                            {site.coordinates.latitude >= 0 ? 'N' : 'S'},{' '}
+                            {Math.abs(site.coordinates.longitude).toFixed(2)}°
+                            {site.coordinates.longitude >= 0 ? 'E' : 'W'} ·{' '}
+                            {site.terrain.slope_deg.toFixed(1)}° slope · {illumPct}% sun
+                          </div>
+                        </div>
+                        <span
+                          style={{
+                            color: statusHex(status),
+                            borderColor: `${statusHex(status)}55`,
+                            backgroundColor: `${statusHex(status)}18`,
+                          }}
+                          className="shrink-0 px-1.5 py-0.5 rounded-[2px] border text-[9px] font-bold uppercase tracking-wider"
+                        >
+                          {statusLabel(status)}
+                        </span>
+                      </button>
+                      {onToggleCompareSite && (
+                        <button
+                          type="button"
+                          data-testid={`dropdown-compare-btn-${site.id}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleCompareSite(site);
+                          }}
+                          disabled={compareQueueFull}
+                          aria-pressed={isCompared}
+                          aria-label={isCompared ? `Remove ${site.name} from compare` : `Add ${site.name} to compare`}
+                          title={
+                            isCompared
+                              ? 'Remove from side-by-side comparison'
+                              : compareQueueFull
+                                ? 'Compare queue full (max 3 sites)'
+                                : 'Add to side-by-side comparison'
+                          }
+                          className={`px-2 rounded-[2px] border flex items-center justify-center shrink-0 transition ${isCompared
+                            ? 'bg-sky-500/20 border-sky-400/70 text-sky-300 hover:bg-sky-500/30'
+                            : compareQueueFull
+                              ? 'bg-black/40 border-white/[0.06] text-[#4B5563] cursor-not-allowed'
+                              : 'bg-black/60 border-white/[0.10] text-[#9CA3AF] hover:text-white hover:border-white/40 hover:bg-[#12141A]'
+                            }`}
+                        >
+                          {isCompared ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {customSites.length > 0 && (
+                  <>
+                    <div className="px-2 pt-2 pb-1 border-b border-white/[0.10] text-[9px] uppercase tracking-widest text-[#6B7280]">
+                      Custom Probed Coordinates
+                    </div>
+                    {customSites.map((site) => {
+                      const metric = siteMetricsMap.get(site.id);
+                      const status = metric?.status ?? 'GREEN';
+                      const illumPct = metric?.illumPct ?? site.defaultIlluminationPct;
+                      const isSelected = site.id === selectedSite.id;
+                      const isCompared = compareSiteIds.includes(site.id);
+                      const compareQueueFull = !isCompared && compareSiteIds.length >= 3;
+                      return (
+                        <div key={site.id} className="flex items-stretch gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onSelectSite(site);
+                              setIsArtemisDropdownOpen(false);
+                            }}
+                            className={`flex-1 min-w-0 text-left px-2.5 py-1.5 rounded-[2px] border transition flex items-center justify-between gap-2 ${isSelected
+                              ? 'bg-[#12141A] border-white/60 text-white'
+                              : 'bg-black/60 border-white/[0.08] text-[#D1D5DB] hover:border-white/30'
+                              }`}
+                          >
+                            <div className="min-w-0">
+                              <div className="text-[10px] font-bold text-white truncate">
+                                {site.name}
+                              </div>
+                              <div className="text-[9px] text-[#9CA3AF] tabular-nums">
+                                {site.terrain.slope_deg.toFixed(1)}° slope · {illumPct}% sun
+                              </div>
+                            </div>
+                            <span
+                              style={{
+                                color: statusHex(status),
+                                borderColor: `${statusHex(status)}55`,
+                                backgroundColor: `${statusHex(status)}18`,
+                              }}
+                              className="shrink-0 px-1.5 py-0.5 rounded-[2px] border text-[9px] font-bold uppercase"
+                            >
+                              {statusLabel(status)}
+                            </span>
+                          </button>
+                          {onToggleCompareSite && (
+                            <button
+                              type="button"
+                              data-testid={`dropdown-compare-btn-${site.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onToggleCompareSite(site);
+                              }}
+                              disabled={compareQueueFull}
+                              aria-pressed={isCompared}
+                              aria-label={isCompared ? `Remove ${site.name} from compare` : `Add ${site.name} to compare`}
+                              title={
+                                isCompared
+                                  ? 'Remove from side-by-side comparison'
+                                  : compareQueueFull
+                                    ? 'Compare queue full (max 3 sites)'
+                                    : 'Add to side-by-side comparison'
+                              }
+                              className={`px-2 rounded-[2px] border flex items-center justify-center shrink-0 transition ${isCompared
+                                ? 'bg-sky-500/20 border-sky-400/70 text-sky-300 hover:bg-sky-500/30'
+                                : compareQueueFull
+                                  ? 'bg-black/40 border-white/[0.06] text-[#4B5563] cursor-not-allowed'
+                                  : 'bg-black/60 border-white/[0.10] text-[#9CA3AF] hover:text-white hover:border-white/40 hover:bg-[#12141A]'
+                                }`}
+                            >
+                              {isCompared ? <Check className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* Center: Floating HUD Overlay Control Pill */}
+        {/* Center: Floating Overlay Toggle, Opacity & Ambient Light Control Pill */}
         <div className="pointer-events-auto flex flex-wrap items-center gap-3 bg-[#090A0D]/95 px-3 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider">
           <button
             type="button"
@@ -1935,7 +2892,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
             className="flex items-center gap-2 text-white hover:opacity-90 transition"
             title="Toggle dynamic Red / Yellow / Green landing assessment overlay"
           >
-            <span className="text-[#9CA3AF]">Landing Assessment Overlay:</span>
+            <span className="text-[#9CA3AF]">Landing Overlay:</span>
             <span
               className={`px-1.5 py-0.5 rounded-[2px] border font-bold ${showAssessmentOverlay
                 ? 'bg-white text-black border-white'
@@ -1960,190 +2917,130 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
               step={1}
               value={overlayOpacity}
               onChange={(e) => setOverlayOpacity(Number(e.target.value))}
-              className="w-24"
+              style={{
+                background: `linear-gradient(to right, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.85) ${overlayOpacity}%, #1F2937 ${overlayOpacity}%, #1F2937 100%)`,
+              }}
+              className="w-20"
             />
             <span className="text-white font-bold tabular-nums w-8 text-right">
               {overlayOpacity}%
             </span>
           </div>
+
+          <div className="h-3.5 w-px bg-white/[0.14] hidden sm:block" />
+
+          <div
+            className="flex items-center gap-2"
+            title="Lift shadow darkness so you can inspect terrain on the night or far side of the Moon"
+          >
+            <button
+              type="button"
+              data-testid="ambient-light-toggle-btn"
+              aria-pressed={ambientLightEnabled}
+              onClick={() => {
+                if (ambientLightEnabled) {
+                  if (ambientLightPct > 0) setLastAmbientLightPct(ambientLightPct);
+                  setAmbientLightEnabled(false);
+                  setAmbientLightPct(0);
+                } else {
+                  const nextPct = lastAmbientLightPct > 0 ? lastAmbientLightPct : 45;
+                  setAmbientLightEnabled(true);
+                  setAmbientLightPct(nextPct);
+                }
+              }}
+              className="flex items-center gap-1.5 text-white hover:opacity-90 transition"
+            >
+              <Sun className="w-3 h-3 text-amber-300" />
+              <span className="text-[#9CA3AF] whitespace-nowrap">Ambient Light:</span>
+              <span
+                className={`px-1.5 py-0.5 rounded-[2px] border font-bold ${ambientLightEnabled
+                  ? 'bg-amber-300 text-black border-amber-200'
+                  : 'bg-[#12141A] text-[#9CA3AF] border-white/[0.14]'
+                  }`}
+              >
+                {ambientLightEnabled ? 'ON' : 'OFF'}
+              </span>
+            </button>
+            <input
+              id="ambient-light-slider"
+              aria-label="Ambient Light Level"
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={ambientLightPct}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setAmbientLightPct(next);
+                if (next > 0) {
+                  setAmbientLightEnabled(true);
+                  setLastAmbientLightPct(next);
+                } else {
+                  setAmbientLightEnabled(false);
+                }
+              }}
+              style={{
+                background: `linear-gradient(to right, #F59E0B 0%, #FDE68A ${ambientLightPct}%, #1F2937 ${ambientLightPct}%, #1F2937 100%)`,
+              }}
+              className="w-20"
+            />
+            <span className="text-white font-bold tabular-nums w-8 text-right">
+              {ambientLightEnabled ? `${ambientLightPct}%` : '0%'}
+            </span>
+          </div>
         </div>
 
-        {/* Right: Quick Action Buttons */}
-        <div className="pointer-events-auto relative flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={() => {
-              setIsCoordInputOpen((prev) => !prev);
-              setIsProbeMode(false);
-            }}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${isCoordInputOpen
-              ? 'bg-white text-black font-bold border-white'
-              : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
-              }`}
-            title="Enter custom lunar latitude & longitude coordinates"
-          >
-            <Crosshair className="w-3.5 h-3.5" />
-            <span>COORDS</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setIsProbeMode((prev) => !prev);
-              setIsCoordInputOpen(false);
-            }}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${isProbeMode
-              ? 'bg-white text-black font-bold border-white'
-              : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
-              }`}
-            title="Clicking anywhere on the Moon inspects coordinates & risk (toggle precision crosshair cursor)"
-          >
-            <MapPin className="w-3.5 h-3.5" />
-            <span>{isProbeMode ? 'CROSSHAIR ON' : 'CLICK MOON'}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setAutoRotate((prev) => !prev)}
-            className={`p-1.5 rounded-[2px] text-[10px] transition border ${autoRotate
-              ? 'bg-white text-black border-white'
-              : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
-              }`}
-            title="Toggle orbital rotation"
-          >
-            <RotateCw className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            type="button"
-            data-testid="open-local-surface-top-btn"
-            onClick={() => setIsLocalSurfaceOpen((prev) => !prev)}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-[2px] bg-[#090A0D]/95 hover:bg-[#12141A] border border-white/[0.14] hover:border-white/35 text-[10px] font-mono uppercase tracking-wider text-white transition"
-            title="Inspect 2.4 km × 2.4 km high-resolution 3D local surface DEM & boulder hazard patch"
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>3D Surface DEM</span>
-          </button>
-
+        {/* Right: Quick Camera & Layer Actions */}
+        <div className="pointer-events-auto flex flex-wrap items-center gap-1.5">
           <button
             type="button"
             onClick={zoomToSouthPole}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded-[2px] bg-[#090A0D]/95 hover:bg-[#12141A] border border-white/[0.14] hover:border-white/35 text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF] hover:text-white transition"
-            title="Zoom into Artemis South Pole cluster"
+            title="Zoom into the Artemis Lunar South Pole cluster"
           >
-            <ZoomIn className="w-3.5 h-3.5" />
+            <Mountain className="w-3.5 h-3.5" />
             <span>South Pole</span>
           </button>
 
           <button
             type="button"
-            onClick={resetToGlobalView}
+            onClick={zoomToEarthSide}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded-[2px] bg-[#090A0D]/95 hover:bg-[#12141A] border border-white/[0.14] hover:border-white/35 text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF] hover:text-white transition"
-            title="Reset to orbital overview"
+            title="Reset camera view to the Earth-facing Near Side (0°N, 0°E)"
           >
-            <Maximize2 className="w-3.5 h-3.5" />
-            <span>Reset</span>
+            <Globe className="w-3.5 h-3.5" />
+            <span>Earth-Side</span>
           </button>
 
-          {/* Compact SpaceX Coordinate Targeting Popover */}
-          {isCoordInputOpen && (
-            <form
-              onSubmit={handleDeployCoordTarget}
-              className="absolute right-0 top-10 w-64 bg-[#090A0D]/98 border border-white/25 rounded-[2px] p-3 space-y-2.5 z-30 font-mono shadow-none"
-            >
-              <div className="flex items-center justify-between border-b border-white/[0.12] pb-1.5">
-                <span className="text-[10px] uppercase tracking-wider text-white font-semibold flex items-center gap-1.5">
-                  <Crosshair className="w-3 h-3" /> Target Coordinate Entry
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsCoordInputOpen(false)}
-                  className="text-[10px] text-[#6B7280] hover:text-white uppercase"
-                >
-                  ESC
-                </button>
-              </div>
+          <button
+            type="button"
+            onClick={() => setShowGrid((prev) => !prev)}
+            aria-pressed={showGrid}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${showGrid
+              ? 'bg-white text-black font-bold border-white'
+              : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
+              }`}
+            title="Toggle selenographic longitude & latitude grid"
+          >
+            <Grid className="w-3.5 h-3.5" />
+            <span>Grid</span>
+          </button>
 
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label
-                    htmlFor="hud-coord-lat"
-                    className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1"
-                  >
-                    LAT (-90..90)
-                  </label>
-                  <input
-                    id="hud-coord-lat"
-                    type="number"
-                    step="0.01"
-                    min={-90}
-                    max={90}
-                    value={latInput}
-                    onChange={(e) => setLatInput(e.target.value)}
-                    className="w-full px-2 py-1 bg-[#000000] border border-white/[0.16] rounded-[2px] text-[11px] text-white tabular-nums focus:outline-none focus:border-white/60"
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="hud-coord-lon"
-                    className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1"
-                  >
-                    LON (-180..180)
-                  </label>
-                  <input
-                    id="hud-coord-lon"
-                    type="number"
-                    step="0.01"
-                    min={-180}
-                    max={180}
-                    value={lonInput}
-                    onChange={(e) => setLonInput(e.target.value)}
-                    className="w-full px-2 py-1 bg-[#000000] border border-white/[0.16] rounded-[2px] text-[11px] text-white tabular-nums focus:outline-none focus:border-white/60"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label
-                  htmlFor="hud-coord-label"
-                  className="block text-[9px] text-[#9CA3AF] uppercase tracking-wider mb-1"
-                >
-                  SITE DESIGNATION (OPT)
-                </label>
-                <input
-                  id="hud-coord-label"
-                  type="text"
-                  placeholder="E.G. HAWORTH RIDGE ALPHA"
-                  value={labelInput}
-                  onChange={(e) => setLabelInput(e.target.value)}
-                  className="w-full px-2 py-1 bg-[#000000] border border-white/[0.16] rounded-[2px] text-[10px] text-white uppercase tracking-wider placeholder:text-[#4B5563] focus:outline-none focus:border-white/60"
-                />
-              </div>
-
-              {coordError && (
-                <div className="text-[9px] text-[#EF4444] uppercase tracking-wider">
-                  {coordError}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                className="w-full py-1.5 bg-white text-black hover:bg-neutral-200 rounded-[2px] text-[10px] font-bold uppercase tracking-widest transition"
-              >
-                DEPLOY &amp; FLY TO TARGET
-              </button>
-            </form>
-          )}
+          <button
+            type="button"
+            onClick={() => setShowCelestialVectors((prev) => !prev)}
+            aria-pressed={showCelestialVectors}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-[2px] text-[10px] font-mono uppercase tracking-wider transition border ${showCelestialVectors
+              ? 'bg-white text-black font-bold border-white'
+              : 'bg-[#090A0D]/95 text-[#9CA3AF] border-white/[0.14] hover:text-white hover:border-white/35'
+              }`}
+            title="Toggle 3D Sun & Earth direction vector indicators around the Moon"
+          >
+            <Navigation className="w-3.5 h-3.5" />
+            <span>Sun / Earth Vectors</span>
+          </button>
         </div>
       </div>
-
-      {/* Precision Probe Cursor Banner */}
-      {isProbeMode && (
-        <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-[#090A0D]/95 border border-white/40 px-3.5 py-1 rounded-[2px] text-[10px] font-mono uppercase tracking-wider text-white flex items-center gap-2 z-20 pointer-events-none">
-          <MapPin className="w-3.5 h-3.5 text-white" />
-          <span>Precision mode active — click anywhere on the Moon surface</span>
-        </div>
-      )}
 
       {/* Hover Pin Tooltip HUD */}
       {hoveredSite && hoveredMetric && (
@@ -2164,159 +3061,218 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
         </div>
       )}
 
-      {/* On-Viewport Selected Surface Area: Coordinates & 4-Factor Risk Assessment HUD Card */}
+      {/* Bottom Stage Stack: Site Inspection Card cleanly stacked above Bottom HUD (zero overlap at any viewport width) */}
       <div
-        data-testid="surface-risk-hud"
-        className={`pointer-events-auto absolute bottom-14 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} w-[312px] sm:w-[336px] max-w-[calc(100vw-24px)] bg-[#090A0D]/95 backdrop-blur-md border border-white/[0.16] rounded-[2px] p-3 font-mono z-20 transition-all duration-300`}
+        className={`absolute bottom-3 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} ${!rightDrawerOpen ? 'right-3' : rightDrawerWide ? 'lg:right-[752px] 2xl:right-[852px] right-3' : 'lg:right-[512px] right-3'} ${leftDrawerOpen && rightDrawerWide ? 'hidden 2xl:flex' : 'flex'} flex-col gap-2 pointer-events-none z-20 transition-all duration-300`}
       >
-        {/* Header: Probed/Selected Area + Overall Risk Verdict Badge */}
-        <div className="flex items-start justify-between gap-2 pb-2 border-b border-white/[0.12]">
-          <div className="min-w-0">
-            <div className="text-[9px] text-[#6B7280] uppercase tracking-widest">
-              SURFACE INSPECTION // {selectedSite.region}
-            </div>
-            <div className="text-xs font-bold text-white uppercase tracking-wider truncate mt-0.5">
-              {selectedSite.name}
-            </div>
-          </div>
-          <span
-            style={{
-              color: statusHex(selectedRiskTelemetry.risk.overall_status),
-              borderColor: `${statusHex(selectedRiskTelemetry.risk.overall_status)}66`,
-              backgroundColor: `${statusHex(selectedRiskTelemetry.risk.overall_status)}1A`,
-            }}
-            className="shrink-0 px-2 py-0.5 rounded-[2px] border text-[10px] font-bold uppercase tracking-wider tabular-nums"
+        {/* Educator Mode Plain-English Callout on Viewport (hidden automatically when Right Drawer opens) */}
+        {!rightDrawerOpen && viewMode === 'educator' && (
+          <div
+            data-testid="educator-viewport-callout"
+            className="pointer-events-auto self-start w-[312px] sm:w-[344px] max-w-full bg-[#090A0D]/95 backdrop-blur-md border border-sky-400/45 rounded-[2px] p-2.5 font-mono text-[10px] space-y-1.5 shadow-xl"
           >
-            {statusLabel(selectedRiskTelemetry.risk.overall_status)}
-          </span>
-        </div>
-
-        {/* Exact Selenographic Coordinates & Elevation Strip */}
-        <div className="grid grid-cols-3 gap-1.5 py-2 border-b border-white/[0.10] text-[10px] tabular-nums">
-          <div className="bg-black/70 border border-white/[0.10] rounded-[2px] px-2 py-1">
-            <span className="block text-[8px] text-[#6B7280] uppercase tracking-widest">LAT</span>
-            <span className="text-white font-semibold">
-              {selectedSite.coordinates.latitude >= 0 ? '+' : ''}
-              {selectedSite.coordinates.latitude.toFixed(2)}°
-            </span>
-          </div>
-          <div className="bg-black/70 border border-white/[0.10] rounded-[2px] px-2 py-1">
-            <span className="block text-[8px] text-[#6B7280] uppercase tracking-widest">LON</span>
-            <span className="text-white font-semibold">
-              {selectedSite.coordinates.longitude >= 0 ? '+' : ''}
-              {selectedSite.coordinates.longitude.toFixed(2)}°
-            </span>
-          </div>
-          <div className="bg-black/70 border border-white/[0.10] rounded-[2px] px-2 py-1">
-            <span className="block text-[8px] text-[#6B7280] uppercase tracking-widest">ELEV</span>
-            <span className="text-white font-semibold">
-              {selectedSite.coordinates.elevation_m >= 0 ? '+' : ''}
-              {selectedSite.coordinates.elevation_m}M
-            </span>
-          </div>
-        </div>
-
-        {/* 4-Factor Risk Assessment Grid */}
-        <div className="grid grid-cols-2 gap-1.5 py-2 text-[10px] tabular-nums">
-          <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
-            <div>
-              <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
-                SLOPE (≤{maxSlopeLimit.toFixed(0)}°)
-              </span>
-              <span className="text-white font-semibold">
-                {selectedSite.terrain.slope_deg.toFixed(1)}°
-              </span>
+            <div className="flex items-center gap-1.5 text-sky-300 font-bold uppercase tracking-wider">
+              <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+              <span>Educator Guide · Survival Factors</span>
             </div>
-            <span
-              style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[0].level) }}
-              className="w-2 h-2 rounded-full shrink-0 border border-white/50"
-            />
+            <p className="text-[10px] text-[#D1D5DB] font-sans leading-snug">
+              <strong className="text-white">Slope:</strong> Tilts over ~{maxSlopeLimit.toFixed(0)}° risk tip-over during touchdown.
+            </p>
+            <p className="text-[10px] text-[#D1D5DB] font-sans leading-snug">
+              <strong className="text-white">Solar Grazing Angle:</strong> Near-horizontal South Pole sunlight casts long shadows that rapidly drain batteries.
+            </p>
+            <p className="text-[10px] text-[#D1D5DB] font-sans leading-snug">
+              <strong className="text-white">Earth Line-of-Sight:</strong> Earth stays low (0°–5° Grazing Zone); crater rims can block direct radio signals.
+            </p>
           </div>
+        )}
 
-          <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
-            <div>
-              <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
-                FLUX (≥{minIllumLimit}%)
-              </span>
-              <span className="text-white font-semibold">
-                {selectedRiskTelemetry.illumPct}% ({selectedSolarTelemetry.effectiveSunElevDeg >= 0 ? '+' : ''}
-                {selectedSolarTelemetry.effectiveSunElevDeg.toFixed(1)}°)
-              </span>
+        {/* On-Viewport Selected Surface Area: Auto-hidden whenever Right Site Assessment Drawer is open */}
+        {!rightDrawerOpen && (isSiteCardVisible ? (
+          <div
+            data-testid="surface-risk-hud"
+            className="pointer-events-auto self-start w-[312px] sm:w-[344px] max-w-full bg-[#090A0D]/95 backdrop-blur-md border border-white/[0.16] rounded-[2px] p-3 font-mono transition-all duration-300"
+          >
+            {/* Header: Probed/Selected Area + Overall Risk Verdict Badge + Close */}
+            <div className="flex items-start justify-between gap-2 pb-2 border-b border-white/[0.12]">
+              <div className="min-w-0">
+                <div className="text-[9px] text-[#6B7280] uppercase tracking-widest">
+                  SURFACE INSPECTION // {selectedSite.region}
+                </div>
+                <div className="text-xs font-bold text-white uppercase tracking-wider truncate mt-0.5">
+                  {selectedSite.name}
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span
+                  style={{
+                    color: statusHex(selectedRiskTelemetry.risk.overall_status),
+                    borderColor: `${statusHex(selectedRiskTelemetry.risk.overall_status)}66`,
+                    backgroundColor: `${statusHex(selectedRiskTelemetry.risk.overall_status)}1A`,
+                  }}
+                  className="px-2 py-0.5 rounded-[2px] border text-[10px] font-bold uppercase tracking-wider tabular-nums"
+                >
+                  {statusLabel(selectedRiskTelemetry.risk.overall_status)}
+                </span>
+                <button
+                  type="button"
+                  data-testid="close-site-card-btn"
+                  onClick={() => setIsSiteCardVisible(false)}
+                  className="p-1 rounded-[2px] bg-[#12141A] hover:bg-white/15 border border-white/[0.14] text-[#9CA3AF] hover:text-white transition"
+                  title="Close site inspection card"
+                  aria-label="Close site inspection card"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
             </div>
-            <span
-              style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[2].level) }}
-              className="w-2 h-2 rounded-full shrink-0 border border-white/50"
-            />
-          </div>
 
-          <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
-            <div>
-              <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
-                ROUGHNESS
-              </span>
-              <span className="text-white font-semibold">{selectedSite.terrain.roughness}</span>
+            {/* Exact Selenographic Coordinates & Elevation Strip */}
+            <div className="grid grid-cols-3 gap-1.5 py-2 border-b border-white/[0.10] text-[10px] tabular-nums">
+              <div className="bg-black/70 border border-white/[0.10] rounded-[2px] px-2 py-1">
+                <span className="block text-[8px] text-[#6B7280] uppercase tracking-widest">LAT</span>
+                <span className="text-white font-semibold">
+                  {selectedSite.coordinates.latitude >= 0 ? '+' : ''}
+                  {selectedSite.coordinates.latitude.toFixed(2)}°
+                </span>
+              </div>
+              <div className="bg-black/70 border border-white/[0.10] rounded-[2px] px-2 py-1">
+                <span className="block text-[8px] text-[#6B7280] uppercase tracking-widest">LON</span>
+                <span className="text-white font-semibold">
+                  {selectedSite.coordinates.longitude >= 0 ? '+' : ''}
+                  {selectedSite.coordinates.longitude.toFixed(2)}°
+                </span>
+              </div>
+              <div className="bg-black/70 border border-white/[0.10] rounded-[2px] px-2 py-1">
+                <span className="block text-[8px] text-[#6B7280] uppercase tracking-widest">ELEV</span>
+                <span className="text-white font-semibold">
+                  {selectedSite.coordinates.elevation_m >= 0 ? '+' : ''}
+                  {selectedSite.coordinates.elevation_m}M
+                </span>
+              </div>
             </div>
-            <span
-              style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[1].level) }}
-              className="w-2 h-2 rounded-full shrink-0 border border-white/50"
-            />
-          </div>
 
-          <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
-            <div>
-              <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
-                EARTH DTE
-              </span>
-              <span className="text-white font-semibold">
-                {selectedRiskTelemetry.hasLos ? 'DIRECT LINK' : 'OCCLUDED'}
-              </span>
+            {/* 4-Factor Risk Assessment Grid */}
+            <div className="grid grid-cols-2 gap-1.5 py-2 text-[10px] tabular-nums">
+              <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
+                <div>
+                  <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
+                    SLOPE (≤{maxSlopeLimit.toFixed(0)}°)
+                  </span>
+                  <span className="text-white font-semibold">
+                    {selectedSite.terrain.slope_deg.toFixed(1)}°
+                  </span>
+                </div>
+                <span
+                  style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[0].level) }}
+                  className="w-2 h-2 rounded-full shrink-0 border border-white/50"
+                />
+              </div>
+
+              <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
+                <div>
+                  <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
+                    FLUX (≥{minIllumLimit}%)
+                  </span>
+                  <span className="text-white font-semibold">
+                    {selectedRiskTelemetry.illumPct}% ({selectedSolarTelemetry.effectiveSunElevDeg >= 0 ? '+' : ''}
+                    {selectedSolarTelemetry.effectiveSunElevDeg.toFixed(1)}°)
+                  </span>
+                </div>
+                <span
+                  style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[2].level) }}
+                  className="w-2 h-2 rounded-full shrink-0 border border-white/50"
+                />
+              </div>
+
+              <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
+                <div>
+                  <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
+                    ROUGHNESS
+                  </span>
+                  <span className="text-white font-semibold">{selectedSite.terrain.roughness}</span>
+                </div>
+                <span
+                  style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[1].level) }}
+                  className="w-2 h-2 rounded-full shrink-0 border border-white/50"
+                />
+              </div>
+
+              <div className="flex items-center justify-between bg-black/50 border border-white/[0.08] rounded-[2px] px-2 py-1">
+                <div>
+                  <span className="block text-[8px] text-[#6B7280] uppercase tracking-wider">
+                    EARTH DTE
+                  </span>
+                  <span className="text-white font-semibold">
+                    {selectedRiskTelemetry.hasLos ? 'DIRECT LINK' : 'OCCLUDED'}
+                  </span>
+                </div>
+                <span
+                  style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[3].level) }}
+                  className="w-2 h-2 rounded-full shrink-0 border border-white/50"
+                />
+              </div>
             </div>
-            <span
-              style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.factors[3].level) }}
-              className="w-2 h-2 rounded-full shrink-0 border border-white/50"
-            />
-          </div>
-        </div>
 
-        {/* Actions: Focus Cam / 3D Surface Patch / Full Analysis */}
-        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            {/* 1-Line Verdict Reason */}
+            <div className="px-2 py-1.5 mb-2 rounded-[2px] bg-black/75 border border-white/[0.10] text-[10px] text-[#D1D5DB] leading-snug">
+              {selectedRiskTelemetry.risk.overall_reason}
+            </div>
+
+            {/* Actions: Focus Cam / 3D Surface Patch / Site Assessment */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <button
+                type="button"
+                onClick={() => flyToSite(selectedSite)}
+                className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.16] rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-white transition whitespace-nowrap"
+              >
+                <Focus className="w-3 h-3" />
+                <span>FOCUS CAM</span>
+              </button>
+              <button
+                type="button"
+                data-testid="open-local-surface-hud-btn"
+                onClick={() => setIsLocalSurfaceOpen(true)}
+                className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-[#12141A] hover:bg-white/15 border border-white/30 rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-white transition whitespace-nowrap"
+                title="Inspect 2.4 km × 2.4 km local meter-scale 3D surface DEM"
+              >
+                <Layers className="w-3 h-3" />
+                <span>3D SURFACE PATCH</span>
+              </button>
+              {onOpenTelemetryDrawer && (
+                <button
+                  type="button"
+                  onClick={onOpenTelemetryDrawer}
+                  className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-white hover:bg-neutral-200 rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-black transition"
+                >
+                  <BarChart3 className="w-3 h-3" />
+                  <span>SITE ASSESSMENT</span>
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
           <button
             type="button"
-            onClick={() => flyToSite(selectedSite)}
-            className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.16] rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-white transition whitespace-nowrap"
+            data-testid="reopen-site-card-btn"
+            onClick={() => setIsSiteCardVisible(true)}
+            className="pointer-events-auto self-start px-2.5 py-1.5 rounded-[2px] bg-[#090A0D]/95 hover:bg-[#12141A] border border-white/25 text-[10px] font-mono uppercase tracking-wider text-white flex items-center gap-2 transition"
           >
-            <Focus className="w-3 h-3" />
-            <span>FOCUS CAM</span>
+            <span
+              style={{ backgroundColor: statusHex(selectedRiskTelemetry.risk.overall_status) }}
+              className="w-2 h-2 rounded-full border border-white/60"
+            />
+            <span>Inspect: {selectedSite.name}</span>
           </button>
-          <button
-            type="button"
-            data-testid="open-local-surface-hud-btn"
-            onClick={() => setIsLocalSurfaceOpen(true)}
-            className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-[#12141A] hover:bg-white/15 border border-white/30 rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-white transition whitespace-nowrap"
-            title="Inspect 2.4 km × 2.4 km local meter-scale 3D surface DEM"
-          >
-            <Layers className="w-3 h-3" />
-            <span>3D SURFACE PATCH</span>
-          </button>
-          {onOpenTelemetryDrawer && (
-            <button
-              type="button"
-              onClick={onOpenTelemetryDrawer}
-              className="w-full flex items-center justify-center gap-1.5 py-1.5 bg-white hover:bg-neutral-200 rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-black transition"
-            >
-              <BarChart3 className="w-3 h-3" />
-              <span>FULL ANALYSIS</span>
-            </button>
-          )}
-        </div>
-      </div>
+        ))}
 
-      {/* Bottom HUD: Dynamic Overlay Legend, Mission UTC Clock Bar & Selected Site Coordinates */}
-      <div
-        className={`absolute bottom-3 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} ${rightDrawerOpen ? 'lg:right-[512px] right-3' : 'right-3'} flex flex-wrap items-center justify-between gap-2 pointer-events-none z-20 transition-all duration-300`}
-      >
-        {showAssessmentOverlay && overlayOpacity > 0 && (
-          <div className="pointer-events-auto bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider flex items-center gap-3">
+        {/* Bottom HUD: RYG Legend + Hover Scoring Methodology, Mission UTC Clock Bar & Cursor/Site Readout */}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div
+            className="pointer-events-auto relative bg-[#090A0D]/95 px-2.5 py-1 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider flex items-center gap-2.5"
+            onMouseEnter={() => setIsRygInfoHovered(true)}
+            onMouseLeave={() => setIsRygInfoHovered(false)}
+          >
             <span className="text-[#6B7280]">RYG</span>
             <div className="flex items-center gap-1 text-[#10B981]">
               <span className="w-2 h-2 rounded-full bg-[#10B981] border border-white/60" />
@@ -2330,94 +3286,207 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
               <span className="w-2 h-2 rounded-full bg-[#EF4444] border border-white/60" />
               <span>NO-GO</span>
             </div>
-          </div>
-        )}
 
-        {/* Mission UTC Date/Time Control Pill */}
-        {onChangeDateOffset && (
-          <div className="pointer-events-auto bg-[#090A0D]/95 px-2.5 py-1 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider flex flex-wrap items-center gap-1.5">
-            <Clock className="w-3 h-3 text-[#9CA3AF] shrink-0" />
-            <input
-              aria-label="Mission UTC Date"
-              type="date"
-              value={utcDateInput}
-              onChange={(e) => applyUtcChange(e.target.value, utcTimeInput)}
-              className="bg-[#000000] border border-white/[0.14] rounded-[2px] px-1.5 py-0.5 text-[10px] text-white tabular-nums [color-scheme:dark] focus:outline-none focus:border-white/50"
-            />
-            <input
-              aria-label="Mission UTC Time"
-              type="time"
-              value={utcTimeInput}
-              onChange={(e) => applyUtcChange(utcDateInput, e.target.value)}
-              className="bg-[#000000] border border-white/[0.14] rounded-[2px] px-1.5 py-0.5 text-[10px] text-white tabular-nums [color-scheme:dark] focus:outline-none focus:border-white/50"
-            />
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => onChangeDateOffset(Math.max(-14.77, sunIlluminationOffset - 1))}
-                className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
-              >
-                -1D
-              </button>
-              <button
-                type="button"
-                onClick={() => onChangeDateOffset(Math.max(-14.77, sunIlluminationOffset - 0.25))}
-                className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
-              >
-                -6H
-              </button>
-              <button
-                type="button"
-                onClick={() => onChangeDateOffset(0)}
-                className={`px-1.5 py-0.5 border border-white/[0.12] rounded-[2px] text-[9px] transition ${Math.abs(sunIlluminationOffset) < 0.02
-                  ? 'bg-white text-black font-bold'
-                  : 'bg-[#12141A] hover:bg-white/15 text-[#9CA3AF] hover:text-white'
-                  }`}
-              >
-                T0
-              </button>
-              <button
-                type="button"
-                onClick={() => onChangeDateOffset(Math.min(14.77, sunIlluminationOffset + 0.25))}
-                className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
-              >
-                +6H
-              </button>
-              <button
-                type="button"
-                onClick={() => onChangeDateOffset(Math.min(14.77, sunIlluminationOffset + 1))}
-                className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
-              >
-                +1D
-              </button>
-            </div>
-            <span
-              className={`px-1.5 py-0.5 rounded-[2px] border text-[9px] font-bold tabular-nums ${selectedSolarTelemetry.isSunlit
-                ? 'border-[#10B981]/50 text-[#10B981] bg-[#10B981]/10'
-                : 'border-[#EF4444]/50 text-[#EF4444] bg-[#EF4444]/10'
+            <button
+              type="button"
+              data-testid="ryg-info-hover-btn"
+              aria-label="Scoring Methodology Information"
+              onFocus={() => setIsRygInfoHovered(true)}
+              onBlur={() => setIsRygInfoHovered(false)}
+              className={`flex items-center justify-center w-5 h-5 rounded-[2px] border transition ${isRygInfoHovered
+                ? 'bg-white text-black border-white'
+                : 'bg-[#12141A] text-[#9CA3AF] border-white/[0.16] hover:text-white hover:border-white/40'
                 }`}
             >
-              SUN {selectedSolarTelemetry.effectiveSunElevDeg >= 0 ? '+' : ''}
-              {selectedSolarTelemetry.effectiveSunElevDeg.toFixed(1)}° ·{' '}
-              {selectedSolarTelemetry.isSunlit ? 'SUNLIT' : 'SHADOW'}
-            </span>
-          </div>
-        )}
+              <Info className="w-3 h-3" />
+            </button>
 
-        <div className="pointer-events-auto ml-auto bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF] flex items-center gap-2.5 tabular-nums">
-          <span className="text-white font-semibold">{selectedSite.name}</span>
-          <span>
-            LAT {selectedSite.coordinates.latitude >= 0 ? '+' : ''}
-            {selectedSite.coordinates.latitude.toFixed(2)}°
-          </span>
-          <span>
-            LON {selectedSite.coordinates.longitude >= 0 ? '+' : ''}
-            {selectedSite.coordinates.longitude.toFixed(2)}°
-          </span>
-          <span>
-            ELEV {selectedSite.coordinates.elevation_m >= 0 ? '+' : ''}
-            {selectedSite.coordinates.elevation_m}M
-          </span>
+            {isRygInfoHovered && (
+              <div
+                data-testid="ryg-methodology-popover"
+                className="absolute left-0 bottom-full pb-2 w-[390px] max-w-[92vw] z-40 normal-case tracking-normal"
+              >
+                <div className="bg-[#090A0D]/95 backdrop-blur-xl border border-white/25 rounded-[2px] p-3.5 font-mono text-[10px] text-[#D1D5DB] space-y-2.5 shadow-2xl">
+                  <div className="border-b border-white/[0.12] pb-2 flex items-center justify-between gap-2">
+                    <div>
+                      <div className="text-[11px] font-bold text-white uppercase tracking-wider">
+                        RYG Scoring Methodology
+                      </div>
+                      <div className="text-[9px] text-[#9CA3AF]">
+                        4-Factor Engineering Safety Matrix (Live Mission Thresholds)
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 text-[9.5px]">
+                    <div className="bg-black/60 border border-white/[0.08] rounded-[2px] p-2">
+                      <div className="text-white font-semibold uppercase tracking-wider">
+                        1. Terrain Slope (LOLA DEM)
+                      </div>
+                      <div className="text-[#9CA3AF] mt-0.5">
+                        <span className="text-[#10B981]">GO</span> &lt;{' '}
+                        {lander ? (maxSlopeLimit * 0.75).toFixed(1) : RISK_THRESHOLDS.slope.greenMax}
+                        ° · <span className="text-[#F59E0B]">CAUTION</span> ≤{' '}
+                        {lander ? maxSlopeLimit.toFixed(1) : RISK_THRESHOLDS.slope.yellowMax}° ·{' '}
+                        <span className="text-[#EF4444]">NO-GO</span> &gt;{' '}
+                        {lander ? maxSlopeLimit.toFixed(1) : RISK_THRESHOLDS.slope.yellowMax}°
+                      </div>
+                    </div>
+
+                    <div className="bg-black/60 border border-white/[0.08] rounded-[2px] p-2">
+                      <div className="text-white font-semibold uppercase tracking-wider">
+                        2. Solar Illumination (Synodic Flux)
+                      </div>
+                      <div className="text-[#9CA3AF] mt-0.5">
+                        <span className="text-[#10B981]">GO</span> ≥{' '}
+                        {lander ? minIllumLimit : RISK_THRESHOLDS.illumination.greenMin}% ·{' '}
+                        <span className="text-[#F59E0B]">CAUTION</span>{' '}
+                        {lander
+                          ? Math.round(minIllumLimit * 0.5)
+                          : RISK_THRESHOLDS.illumination.yellowMin}
+                        –{(lander ? minIllumLimit : RISK_THRESHOLDS.illumination.greenMin) - 1}% ·{' '}
+                        <span className="text-[#EF4444]">NO-GO</span> &lt;{' '}
+                        {lander
+                          ? Math.round(minIllumLimit * 0.5)
+                          : RISK_THRESHOLDS.illumination.yellowMin}
+                        %
+                      </div>
+                    </div>
+
+                    <div className="bg-black/60 border border-white/[0.08] rounded-[2px] p-2">
+                      <div className="text-white font-semibold uppercase tracking-wider">
+                        3. Surface Roughness (Crater &amp; Boulder Field)
+                      </div>
+                      <div className="text-[#9CA3AF] mt-0.5">
+                        Tolerance limit:{' '}
+                        <span className="text-white font-semibold">
+                          {lander?.maxRoughness ?? 'MODERATE'}
+                        </span>{' '}
+                        — exceeding tolerance shifts rating to CAUTION or NO-GO.
+                      </div>
+                    </div>
+
+                    <div className="bg-black/60 border border-white/[0.08] rounded-[2px] p-2">
+                      <div className="text-white font-semibold uppercase tracking-wider">
+                        4. Direct-to-Earth (DTE) Comms Link
+                      </div>
+                      <div className="text-[#9CA3AF] mt-0.5">
+                        {lander?.requiresEarthLos === false
+                          ? 'Relay allowed: Blocked Earth LOS triggers CAUTION (relay required).'
+                          : 'Direct DSN required: Blocked Earth LOS triggers immediate NO-GO.'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="pt-1.5 border-t border-white/[0.10] text-[9px] text-[#9CA3AF]">
+                    <span className="text-white font-semibold uppercase">Verdict Rule:</span> Any{' '}
+                    <span className="text-[#EF4444]">NO-GO</span> yields NO-GO · Else any{' '}
+                    <span className="text-[#F59E0B]">CAUTION</span> yields CAUTION · Otherwise GO.
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Mission UTC Date/Time Control Pill */}
+          {onChangeDateOffset && (
+            <div className="pointer-events-auto bg-[#090A0D]/95 px-2.5 py-1 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider flex flex-wrap items-center gap-1.5">
+              <Clock className="w-3 h-3 text-[#9CA3AF] shrink-0" />
+              <input
+                aria-label="Mission UTC Date"
+                type="date"
+                value={utcDateInput}
+                onChange={(e) => applyUtcChange(e.target.value, utcTimeInput)}
+                className="bg-[#000000] border border-white/[0.14] rounded-[2px] px-1.5 py-0.5 text-[10px] text-white tabular-nums [color-scheme:dark] focus:outline-none focus:border-white/50"
+              />
+              <input
+                aria-label="Mission UTC Time"
+                type="time"
+                value={utcTimeInput}
+                onChange={(e) => applyUtcChange(utcDateInput, e.target.value)}
+                className="bg-[#000000] border border-white/[0.14] rounded-[2px] px-1.5 py-0.5 text-[10px] text-white tabular-nums [color-scheme:dark] focus:outline-none focus:border-white/50"
+              />
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => onChangeDateOffset(Math.max(missionEpochOffset - 14, sunIlluminationOffset - 1))}
+                  className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
+                >
+                  -1D
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeDateOffset(Math.max(missionEpochOffset - 14, sunIlluminationOffset - 0.25))}
+                  className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
+                >
+                  -6H
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeDateOffset(missionEpochOffset)}
+                  className={`px-1.5 py-0.5 border border-white/[0.12] rounded-[2px] text-[9px] transition ${Math.abs(sunIlluminationOffset - missionEpochOffset) < 0.02
+                    ? 'bg-white text-black font-bold'
+                    : 'bg-[#12141A] hover:bg-white/15 text-[#9CA3AF] hover:text-white'
+                    }`}
+                >
+                  T0
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeDateOffset(Math.min(missionEpochOffset + 14, sunIlluminationOffset + 0.25))}
+                  className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
+                >
+                  +6H
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onChangeDateOffset(Math.min(missionEpochOffset + 14, sunIlluminationOffset + 1))}
+                  className="px-1.5 py-0.5 bg-[#12141A] hover:bg-white/15 border border-white/[0.12] rounded-[2px] text-[9px] text-[#9CA3AF] hover:text-white transition"
+                >
+                  +1D
+                </button>
+              </div>
+              <span
+                className={`px-1.5 py-0.5 rounded-[2px] border text-[9px] font-bold tabular-nums ${selectedSolarTelemetry.isSunlit
+                  ? 'border-[#10B981]/50 text-[#10B981] bg-[#10B981]/10'
+                  : 'border-[#EF4444]/50 text-[#EF4444] bg-[#EF4444]/10'
+                  }`}
+              >
+                SUN {selectedSolarTelemetry.effectiveSunElevDeg >= 0 ? '+' : ''}
+                {selectedSolarTelemetry.effectiveSunElevDeg.toFixed(1)}° ·{' '}
+                {selectedSolarTelemetry.isSunlit ? 'SUNLIT' : 'SHADOW'}
+              </span>
+            </div>
+          )}
+
+          <div className="pointer-events-auto ml-auto bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF] flex items-center gap-2.5 tabular-nums">
+            {hoverCoords ? (
+              <>
+                <span className="text-sky-300 font-semibold">CURSOR</span>
+                <span className="text-white">
+                  {Math.abs(hoverCoords.lat).toFixed(2)}°{hoverCoords.lat >= 0 ? 'N' : 'S'},{' '}
+                  {Math.abs(hoverCoords.lon).toFixed(2)}°{hoverCoords.lon >= 0 ? 'E' : 'W'}
+                </span>
+                <span className="text-[#6B7280] hidden xl:inline">· CLICK MOON TO INSPECT</span>
+              </>
+            ) : (
+              <>
+                <span className="text-white font-semibold">{selectedSite.name}</span>
+                <span>
+                  LAT {selectedSite.coordinates.latitude >= 0 ? '+' : ''}
+                  {selectedSite.coordinates.latitude.toFixed(2)}°
+                </span>
+                <span>
+                  LON {selectedSite.coordinates.longitude >= 0 ? '+' : ''}
+                  {selectedSite.coordinates.longitude.toFixed(2)}°
+                </span>
+                <span>
+                  ELEV {selectedSite.coordinates.elevation_m >= 0 ? '+' : ''}
+                  {selectedSite.coordinates.elevation_m}M
+                </span>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -2429,6 +3498,7 @@ export const LunarGlobe3D: React.FC<LunarGlobe3DProps> = ({
           sunIlluminationOffset={sunIlluminationOffset}
           showAssessmentOverlay={showAssessmentOverlay}
           overlayOpacity={overlayOpacity}
+          ambientLightPct={ambientLightEnabled ? ambientLightPct : 0}
           leftDrawerOpen={leftDrawerOpen}
           rightDrawerOpen={rightDrawerOpen}
           onClose={() => setIsLocalSurfaceOpen(false)}

@@ -17,23 +17,28 @@ import {
   TrendingDown 
 } from 'lucide-react';
 
-interface CountdownTimersProps {
-  site: CandidateSite;
-  simulatedDateOffset: number;
-  computedIllumination: number;
-  parameters?: LanderProfile;
-  lander?: LanderProfile;
+export interface SiteSurvivalMetrics {
+  currentSolar: ReturnType<typeof computeSolarTelemetryAtTime>;
+  currentEarth: ReturnType<typeof computeEarthTelemetryAtTime>;
+  isSunlit: boolean;
+  hoursUntilSunset: number;
+  hoursUntilSunrise: number;
+  shadowDurationHours: number;
+  isCommsLocked: boolean;
+  commsRemainingHours: number;
+  batterySoCPct: number;
+  maxBatteryHours: number;
+  isShadowCrisis: boolean;
+  isBatteryLow: boolean;
 }
 
-export const CountdownTimers: React.FC<CountdownTimersProps> = ({
-  site,
-  simulatedDateOffset,
-  computedIllumination,
-  parameters,
-  lander,
-}) => {
-  const activeParams = parameters || lander;
-  const minIllum = activeParams?.minIlluminationPct ?? 30;
+export function computeSiteSurvivalMetrics(
+  site: CandidateSite,
+  simulatedDateOffset: number,
+  computedIllumination: number,
+  parameters?: LanderProfile
+): SiteSurvivalMetrics {
+  const minIllum = parameters?.minIlluminationPct ?? 30;
   const { latitude, longitude } = site.coordinates;
 
   // Compute exact 3D sun & Earth horizon elevation aligned with globe shadows and plotter
@@ -100,6 +105,51 @@ export const CountdownTimers: React.FC<CountdownTimersProps> = ({
   // Shadow Hazard Severity
   const isShadowCrisis = !isSunlit && shadowDurationHours >= 48;
   const isBatteryLow = batterySoCPct < 30;
+
+  return {
+    currentSolar,
+    currentEarth,
+    isSunlit,
+    hoursUntilSunset,
+    hoursUntilSunrise,
+    shadowDurationHours,
+    isCommsLocked,
+    commsRemainingHours,
+    batterySoCPct,
+    maxBatteryHours,
+    isShadowCrisis,
+    isBatteryLow,
+  };
+}
+
+interface CountdownTimersProps {
+  site: CandidateSite;
+  simulatedDateOffset: number;
+  computedIllumination: number;
+  parameters?: LanderProfile;
+  lander?: LanderProfile;
+}
+
+export const CountdownTimers: React.FC<CountdownTimersProps> = ({
+  site,
+  simulatedDateOffset,
+  computedIllumination,
+  parameters,
+  lander,
+}) => {
+  const activeParams = parameters || lander;
+  const {
+    isSunlit,
+    hoursUntilSunset,
+    hoursUntilSunrise,
+    shadowDurationHours,
+    isCommsLocked,
+    commsRemainingHours,
+    batterySoCPct,
+    maxBatteryHours,
+    isShadowCrisis,
+    isBatteryLow,
+  } = computeSiteSurvivalMetrics(site, simulatedDateOffset, computedIllumination, activeParams);
 
   return (
     <div className="bg-[#090A0D] border border-white/[0.14] rounded-[2px] p-5 space-y-4">

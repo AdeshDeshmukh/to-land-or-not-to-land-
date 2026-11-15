@@ -8,10 +8,10 @@ import {
   getSubsolarPoint,
 } from '../utils/lunarTelemetry';
 import {
-  ArrowLeft,
   BarChart3,
   Crosshair,
   Eye,
+  Globe,
   Grid,
   Layers,
   Mountain,
@@ -24,6 +24,7 @@ export interface LocalSurfaceDetailViewProps {
   sunIlluminationOffset: number;
   showAssessmentOverlay: boolean;
   overlayOpacity: number;
+  ambientLightPct?: number;
   leftDrawerOpen?: boolean;
   rightDrawerOpen?: boolean;
   onClose: () => void;
@@ -515,6 +516,7 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
   sunIlluminationOffset,
   showAssessmentOverlay,
   overlayOpacity,
+  ambientLightPct = 0,
   leftDrawerOpen = false,
   rightDrawerOpen = false,
   onClose,
@@ -522,6 +524,7 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const miniMapCanvasRef = useRef<HTMLCanvasElement>(null);
+  const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
 
   const [layerMode, setLayerMode] = useState<SurfaceLayerMode>(() =>
     showAssessmentOverlay && overlayOpacity > 0 ? 'RYG_HAZARD' : 'REGOLITH'
@@ -859,6 +862,12 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
     }
   }, [dem, layerMode, wireframeEnabled, overlayOpacity, sunIlluminationOffset, maxSlopeLimit, syncDemGeometry]);
 
+  // Sync Ambient Light fill on 3D surface patch shadows
+  useEffect(() => {
+    if (!ambientLightRef.current) return;
+    ambientLightRef.current.intensity = 0.16 + (ambientLightPct / 100) * 1.35;
+  }, [ambientLightPct]);
+
   // Draw Interactive 2D Top-Down Slope & Contour Mini-Map
   useEffect(() => {
     const canvas = miniMapCanvasRef.current;
@@ -987,8 +996,9 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
     container.innerHTML = '';
     container.appendChild(renderer.domElement);
 
-    const ambient = new THREE.AmbientLight(0xffffff, 0.16);
+    const ambient = new THREE.AmbientLight(0xffffff, 0.16 + (ambientLightPct / 100) * 1.35);
     scene.add(ambient);
+    ambientLightRef.current = ambient;
 
     const sunLight = new THREE.DirectionalLight(0xffffff, 3.2);
     sunLight.position.set(14, 6, 8);
@@ -1254,6 +1264,7 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
       padGroupRef.current = null;
       padRingsRef.current = [];
       sunLightRef.current = null;
+      ambientLightRef.current = null;
     };
   }, [syncDemGeometry]);
 
@@ -1280,20 +1291,30 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
       <div
         className={`pointer-events-none absolute top-3 ${leftDrawerOpen ? 'lg:left-[396px] left-3' : 'left-3'} ${rightDrawerOpen ? 'lg:right-[512px] right-3' : 'right-3'} flex flex-wrap items-center justify-between gap-2 z-20 transition-all duration-300`}
       >
-        {/* Left: Back to 3D Globe + Title Badge */}
+        {/* Left: Seamless 3D Globe <-> 3D Surface Patch View Switcher */}
         <div className="pointer-events-auto flex items-center gap-2">
-          <button
-            type="button"
-            data-testid="close-local-surface-btn"
-            onClick={onClose}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-white text-black hover:bg-neutral-200 rounded-[2px] text-[10px] font-mono font-bold uppercase tracking-wider transition"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to 3D Globe</span>
-          </button>
+          <div className="flex items-center bg-[#090A0D]/95 p-0.5 rounded-[2px] border border-white/[0.16] text-[10px] font-mono uppercase tracking-wider">
+            <button
+              type="button"
+              data-testid="close-local-surface-btn"
+              onClick={onClose}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[2px] text-[#9CA3AF] hover:text-white hover:bg-white/10 transition"
+              title="Switch back to global 3D Moon view"
+            >
+              <Globe className="w-3.5 h-3.5" />
+              <span>3D Moon Globe</span>
+            </button>
+            <button
+              type="button"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-[2px] bg-white text-black font-bold transition"
+              aria-current="page"
+            >
+              <Mountain className="w-3.5 h-3.5" />
+              <span>3D Surface Patch</span>
+            </button>
+          </div>
 
-          <div className="hidden sm:flex items-center gap-2 bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF]">
-            <Mountain className="w-3.5 h-3.5 text-white" />
+          <div className="hidden xl:flex items-center gap-2 bg-[#090A0D]/95 px-2.5 py-1.5 rounded-[2px] border border-white/[0.14] text-[10px] font-mono uppercase tracking-wider text-[#9CA3AF]">
             <span>
               LOCAL DEM // <strong className="text-white">2.4 KM × 2.4 KM · 10M/PX</strong>
             </span>
@@ -1489,7 +1510,7 @@ export const LocalSurfaceDetailView: React.FC<LocalSurfaceDetailViewProps> = ({
               className="flex-1 flex items-center justify-center gap-1 py-1.5 bg-white hover:bg-neutral-200 rounded-[2px] text-[10px] font-bold uppercase tracking-wider text-black transition"
             >
               <BarChart3 className="w-3 h-3" />
-              <span>Telemetry</span>
+              <span>Site Assessment</span>
             </button>
           )}
         </div>
