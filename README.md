@@ -476,6 +476,10 @@ Every contribution in this repository adheres to the verification workflow defin
 - Live headless/interactive WebGL visual inspection with `0` console errors across full-screen desktop viewports.
 - Strict security & repository hygiene (no tracked secrets, `.env` files, or unoptimized raw binary dumps).
 
+### AI / Super Intelligence Disclosure
+
+> **AI / Super Intelligence Disclosure:** AI coding and writing assistants were used during development to accelerate React/Three.js UI scaffolding, troubleshoot TypeScript edge cases, and refine documentation text. All orbital physics validation, engineering risk thresholds, NASA dataset integration, and final architectural decisions were designed, audited, and verified by our human team.
+
 ### Contributors
 
 - **Adesh Deshmukh** — Tech Lead & Full-Stack Architect ([@AdeshDeshmukh](https://github.com/AdeshDeshmukh))
