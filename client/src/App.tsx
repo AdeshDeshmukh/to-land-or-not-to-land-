@@ -62,20 +62,38 @@ export default function App() {
 
   const missionUtc = formatMissionUtc(simulatedDateOffset);
 
-  const handleDeployCustomCoordinates = (lat: number, lon: number, customName?: string) => {
-    const newSite = estimateLunarTerrain(Number(lat.toFixed(2)), Number(lon.toFixed(2)), customName);
+  const handleDeployCustomCoordinates = (
+    lat: number,
+    lon: number,
+    customName?: string,
+    sampledSlopeDeg?: number,
+    sampledElevM?: number,
+    options?: { openDrawer?: boolean }
+  ) => {
+    const newSite = estimateLunarTerrain(
+      Number(lat.toFixed(2)),
+      Number(lon.toFixed(2)),
+      customName,
+      sampledSlopeDeg,
+      sampledElevM
+    );
     setAllSites((prev) => {
-      // Keep the 5 canonical sites + up to 6 most recent custom targets
       const presets = prev.slice(0, CANDIDATE_SITES.length);
-      const custom = prev.slice(CANDIDATE_SITES.length).slice(-5);
-      return [...presets, ...custom, newSite];
+      const custom = prev.slice(CANDIDATE_SITES.length);
+      if (newSite.id === 'custom_surface_target') {
+        const namedOnly = custom.filter((s) => s.id !== 'custom_surface_target').slice(-4);
+        return [...presets, ...namedOnly, newSite];
+      }
+      return [...presets, ...custom.slice(-5), newSite];
     });
     setSelectedSite(newSite);
     setCustomLatInput(newSite.coordinates.latitude.toFixed(2));
     setCustomLonInput(newSite.coordinates.longitude.toFixed(2));
     setCustomNameInput('');
     setCustomCoordError('');
-    setIsRightDrawerOpen(true);
+    if (options?.openDrawer) {
+      setIsRightDrawerOpen(true);
+    }
   };
 
   const handleSubmitDrawerCoordinates = (e: React.FormEvent) => {
@@ -90,7 +108,14 @@ export default function App() {
       setCustomCoordError('Longitude must be between -180° and +180°.');
       return;
     }
-    handleDeployCustomCoordinates(lat, lon, customNameInput.trim() || undefined);
+    handleDeployCustomCoordinates(
+      lat,
+      lon,
+      customNameInput.trim() || undefined,
+      undefined,
+      undefined,
+      { openDrawer: true }
+    );
   };
 
   // Left & Right drawer toggles for clean, centered map experience
@@ -152,7 +177,7 @@ export default function App() {
   return (
     <ViewModeContext.Provider value={viewMode}>
     <div
-      className="h-screen w-screen bg-black text-white flex flex-col font-sans relative overflow-hidden select-none"
+      className="fixed inset-0 w-full h-full bg-black text-white flex flex-col font-sans overflow-hidden select-none"
       style={{ overflow: 'clip' }}
     >
       {/* Background Monochrome Starfield */}
@@ -223,6 +248,7 @@ export default function App() {
               setIsPlaying(false);
               setSimulatedDateOffset(offset);
             }}
+            onOpenTelemetryDrawer={() => setIsRightDrawerOpen(true)}
             leftDrawerOpen={isLeftDrawerOpen}
             rightDrawerOpen={isRightDrawerOpen}
           />
@@ -572,7 +598,7 @@ export default function App() {
                 </span>
                 <h3 className="text-base font-bold text-white tracking-tight mt-0.5">{selectedSite.name}</h3>
                 <span className="text-[11px] text-[#9CA3AF] font-mono tabular-nums">
-                  {selectedSite.coordinates.latitude}° N, {selectedSite.coordinates.longitude}° E · ELEV {selectedSite.coordinates.elevation_m}M
+                  {Math.abs(selectedSite.coordinates.latitude).toFixed(2)}° {selectedSite.coordinates.latitude >= 0 ? 'N' : 'S'}, {Math.abs(selectedSite.coordinates.longitude).toFixed(2)}° {selectedSite.coordinates.longitude >= 0 ? 'E' : 'W'} · ELEV {selectedSite.coordinates.elevation_m >= 0 ? `+${selectedSite.coordinates.elevation_m}` : selectedSite.coordinates.elevation_m}M
                 </span>
               </div>
               <div className="shrink-0">{getStatusBadge(assessment.overall_status)}</div>
@@ -595,6 +621,7 @@ export default function App() {
               assessment={assessment}
               parameters={landingParams}
               illuminationPct={computedIllumination}
+              hasEarthLos={computedEarthLos}
             />
           )}
 

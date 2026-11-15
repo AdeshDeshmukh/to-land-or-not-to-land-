@@ -79,7 +79,7 @@ export const CANDIDATE_SITES: CandidateSite[] = [
     region: "South Pole",
     coordinates: {
       latitude: -89.45,
-      longitude: 222.70,
+      longitude: -137.30,
       elevation_m: 3850
     },
     description: "Artemis candidate corridor linking the ridge of Shackleton to nearby elevated terrain. Variable illumination creates periodic shadow windows.",

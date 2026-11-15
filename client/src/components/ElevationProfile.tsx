@@ -26,51 +26,53 @@ export const ElevationProfile: React.FC<ElevationProfileProps> = ({ site }) => {
     const baseSlope = site.terrain.slope_deg;
 
     // Site-specific topographic profile mathematical synthesis based on LOLA DEM signatures
-    for (let x = -1000; x <= 1000; x += 25) {
-      let elevOffset = 0;
-
+    const rawElevOffset = (x: number): number => {
       if (site.id === 'shackleton_rim') {
         // Shackleton: Narrow rim crest at x=0. Outer flank (x < 0) has gentle slope.
         // Inner crater wall (x > 0) plunges down into deep crater (>30° drop).
         if (x < -200) {
-          elevOffset = (x + 200) * 0.12 - Math.sin(x * 0.02) * 6;
+          return (x + 200) * 0.12 - Math.sin(x * 0.02) * 6;
         } else if (x > 200) {
-          elevOffset = -(x - 200) * 0.48 - Math.sin(x * 0.015) * 12;
-        } else {
-          // Flat rim spine
-          elevOffset = -Math.pow(x / 200, 2) * 8 + Math.cos(x * 0.03) * 2;
+          return -(x - 200) * 0.48 - Math.sin(x * 0.015) * 12;
         }
-      } else if (site.id === 'malapert_mountain') {
-        // Malapert: High summit dome, dropping off asymmetrically
-        elevOffset = -Math.pow(x / 500, 2) * 85 + Math.sin(x * 0.01) * 15;
-      } else if (site.id === 'nobile_crater_rim') {
-        // Nobile: Severely degraded crater rim, micro-craters and steep hummocky slopes
-        elevOffset = -(x * 0.28) + Math.sin(x * 0.018) * 35 + Math.cos(x * 0.007) * 25;
-      } else if (site.id === 'mare_tranquillitatis') {
-        // Apollo 11: Ultra-smooth basaltic mare, tiny gentle undulating craterlets
-        elevOffset = Math.sin(x * 0.005) * 2.5 + Math.cos(x * 0.02) * 0.8;
-      } else if (site.id === 'connecting_ridge') {
-        // Connecting Ridge: Saddle shape between Shackleton and de Gerlache
-        elevOffset = -Math.abs(x) * 0.22 + Math.cos(x * 0.01) * 12;
-      } else {
-        // Generic synthesized profile for probed points
-        elevOffset = Math.sin(x * 0.008) * (baseSlope * 4) + Math.cos(x * 0.02) * (baseSlope * 1.5);
+        return -Math.pow(x / 200, 2) * 8 + Math.cos(x * 0.03) * 2;
       }
+      if (site.id === 'malapert_mountain') {
+        return -Math.pow(x / 500, 2) * 85 + Math.sin(x * 0.01) * 15;
+      }
+      if (site.id === 'nobile_crater_rim') {
+        return -(x * 0.28) + Math.sin(x * 0.018) * 35 + Math.cos(x * 0.007) * 25;
+      }
+      if (site.id === 'mare_tranquillitatis') {
+        return Math.sin(x * 0.005) * 2.5 + Math.cos(x * 0.02) * 0.8;
+      }
+      if (site.id === 'connecting_ridge') {
+        return -Math.abs(x) * 0.22 + Math.cos(x * 0.01) * 12;
+      }
+      return Math.sin(x * 0.008) * (baseSlope * 4) + Math.cos(x * 0.02) * (baseSlope * 1.5);
+    };
+    const centerElevOffset = rawElevOffset(0);
 
+    for (let x = -1000; x <= 1000; x += 25) {
+      const elevOffset = rawElevOffset(x) - centerElevOffset;
       const totalElevation = Math.round((baseElev + elevOffset) * 10) / 10;
-      
-      // Calculate local instantaneous slope gradient
+
+      // Calculate local instantaneous slope gradient (exact site slope anchored at x=0)
       let localSlope = baseSlope;
-      if (site.id === 'shackleton_rim') {
+      if (x === 0) {
+        localSlope = baseSlope;
+      } else if (site.id === 'shackleton_rim') {
         if (x > 250) localSlope = Math.min(34, 18 + (x - 250) * 0.02);
         else if (x < -250) localSlope = Math.min(14, 6 + Math.abs(x) * 0.008);
-        else localSlope = 3.5;
+        else localSlope = baseSlope;
+      } else if (site.id === 'malapert_mountain') {
+        localSlope = Math.max(4.5, baseSlope + Math.abs(x) * 0.006 + Math.sin(x * 0.012) * 1.4);
       } else if (site.id === 'nobile_crater_rim') {
         localSlope = Math.min(28, 15 + Math.abs(Math.sin(x * 0.02)) * 11);
       } else if (site.id === 'mare_tranquillitatis') {
         localSlope = Math.max(0.8, Math.min(2.8, 1.8 + Math.sin(x * 0.01) * 0.6));
       } else if (site.id === 'connecting_ridge') {
-        localSlope = Math.abs(x) > 200 ? 16.5 : 8.2;
+        localSlope = Math.abs(x) > 200 ? 16.5 : baseSlope;
       } else {
         localSlope = Math.max(1, baseSlope + Math.sin(x * 0.01) * 3);
       }

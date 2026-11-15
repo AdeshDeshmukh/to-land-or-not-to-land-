@@ -7,6 +7,7 @@ interface PlainEnglishSummaryProps {
   assessment: RiskAssessment;
   parameters: LanderProfile;
   illuminationPct: number;
+  hasEarthLos?: boolean;
 }
 
 const VERDICT: Record<string, string> = {
@@ -21,10 +22,11 @@ export const PlainEnglishSummary: React.FC<PlainEnglishSummaryProps> = ({
   assessment,
   parameters,
   illuminationPct,
+  hasEarthLos,
 }) => {
   const slope = site.terrain.slope_deg;
   const roughness = site.terrain.roughness.toLowerCase();
-  const hasLos = site.defaultEarthLos;
+  const hasLos = hasEarthLos !== undefined ? hasEarthLos : site.defaultEarthLos;
 
   const lines: string[] = [
     `The ground here tilts about ${slope.toFixed(1)}°. Your limit is ${parameters.maxSlopeDeg.toFixed(1)}°; steeper than that and a lander could tip over.`,
