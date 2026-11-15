@@ -337,7 +337,7 @@ to-land-or-not-to-land-/
 │
 ├── ARCHITECTURE.md                      # THIS FILE
 ├── README.md                            # Project overview, quickstart, team credits
-├── LICENSE                              # MIT License
+├── LICENSE                              # Apache 2.0 License
 └── .gitignore                           # Node + Python + OS + GIS binary exclusions
 ```
 
@@ -728,11 +728,11 @@ main (protected — always deployable)
 - **Decision**: CesiumJS with the Moon's ellipsoid (1,737.4 km radius) and NASA Moon Trek imagery layers.
 - **Consequence**: Large initial bundle (~2.5 MB). Mitigated by lazy loading.
 
-### ADR-005: MIT License
+### ADR-005: Apache 2.0 License
 - **Date**: 2026-11-14
 - **Status**: Accepted
-- **Context**: NASA Space Apps Challenge requires open-source submissions. MIT is maximally permissive, has zero compatibility friction with our dependencies (CesiumJS uses Apache 2.0), and is widely understood by academic and professional reviewers.
-- **Decision**: MIT License.
+- **Context**: NASA Space Apps Challenge requires open-source submissions. Apache 2.0 is an OSI-approved, permissive open-source license that provides explicit patent grant protections, broad commercial and academic usability, and clean compatibility with our dependencies.
+- **Decision**: Apache License 2.0.
 - **Consequence**: Any person or organisation may use, modify, and distribute the code with attribution.
 
 ---
