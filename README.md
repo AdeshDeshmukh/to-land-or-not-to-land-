@@ -2,7 +2,7 @@
 
 # TO LAND OR NOT TO LAND
 
-**Interactive Lunar Landing Site Risk Assessment, 3D Surface Telemetry & Touchdown Hazard Decision Support Platform**
+**Lunar Landing Site Navigator — Interactive Risk Assessment, 3D Surface Telemetry & Touchdown Hazard Decision Support**
 
 *Built for NASA Space Apps Challenge 2026 — Open Science & Artemis Lunar South Pole Exploration*
 
@@ -15,6 +15,23 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-111827?style=for-the-badge&logo=tailwindcss&logoColor=38BDF8)](https://tailwindcss.com/)
 [![Docker Ready](https://img.shields.io/badge/Docker-Nginx_Multi--Stage-090A0D?style=for-the-badge&logo=docker&logoColor=2496ED)](./Dockerfile)
 
+<br/>
+
+<!-- Hero visual: swap for a 6-10 s GIF (e.g. docs/assets/hero.gif) once recorded -->
+<img src="./docs/assets/hero-skybox-earth-moon-sun.jpg" alt="3D Moon with Earth, Sun and pinpoint starfield skybox in the To Land or Not to Land flight-telemetry interface" width="100%" />
+
+<sub>Whole-Moon WebGL view with the real-time Sun / Earth skybox, grid and SpaceX-style telemetry HUD.</sub>
+
+<br/><br/>
+
+<table>
+  <tr>
+    <td width="33%" align="center"><img src="./docs/assets/globe-hud.jpg" alt="Whole-Moon 3D globe with NASA Artemis candidate sites and risk HUD" /><br/><sub><b>Whole-Moon 3D Globe</b> with Artemis candidate sites &amp; SpaceX-style HUD</sub></td>
+    <td width="33%" align="center"><img src="./docs/assets/surface-patch-dem.jpg" alt="2.4 km local 3D surface DEM with ray-marched shadows and boulder hazards" /><br/><sub><b>2.4 km Local Surface DEM</b> with ray-marched shadows &amp; boulders</sub></td>
+    <td width="33%" align="center"><img src="./docs/assets/compare-matrix.jpg" alt="Three-site side-by-side multi-criteria comparison matrix" /><br/><sub><b>3-Site Comparison Matrix</b> across slope, roughness, sun &amp; Earth link</sub></td>
+  </tr>
+</table>
+
 </div>
 
 ---
@@ -23,6 +40,89 @@
 > **Experience the platform live in your browser:**  
 > 🔗 **[https://to-land-or-not-to-land.vercel.app/](https://to-land-or-not-to-land.vercel.app/)**  
 > *(Zero installation required — WebGL 3D lunar terrain, real NASA datasets, and real-time telemetry)*
+
+---
+
+## 🏆 NASA International Space Apps Challenge 2026
+
+> **Challenge:** “To Land or Not to Land: Choosing the Best Lunar South Pole Touchdown Site”
+>
+> **Mission Goal:** Help Artemis mission planners evaluate safe landing zones near the lunar South Pole by reconciling extreme topographic hazards (steep crater slopes, boulder fields, permanently shadowed regions) with vital mission resources (near-continuous sunlight and direct Earth communications).
+
+---
+
+## 🚀 Key Features at a Glance
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🌕 Whole-Moon 3D WebGL</h3>
+      4K LROC albedo, seam-free object-space normals down to the <code>-90°</code> pole, a north-up selenographic orbit camera, and a real-time 3D deep-space skybox (pinpoint stars, Milky Way, Earth and Sun).
+    </td>
+    <td width="50%" valign="top">
+      <h3>🏔️ 2.4 km Surface DEM</h3>
+      Meter-scale (<code>10 m/px</code>) finite-difference topography with ray-marched shadows, boulder scattering and an interactive 50 m touchdown pad.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>🛰️ 4-Factor Flight Risk Engine</h3>
+      Live Go / Caution / No-Go determination across terrain slope, surface roughness, solar illumination and direct-to-Earth line-of-sight, tunable with Strict / Artemis / Tolerant presets.
+    </td>
+    <td width="50%" valign="top">
+      <h3>⏱️ Synodic Ephemeris Simulator</h3>
+      A ±14-day scrubber around an editable Mission Epoch (UTC) that keeps Sun elevation, Earth libration and the terminator in sync across the globe, local horizon view and telemetry.
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <h3>📍 9 NASA Artemis Candidate Regions</h3>
+      The October 2024 shortlist is built in (toggle markers <code>ON</code>/<code>OFF</code>; hover <b>i</b> for provenance), and any custom coordinate can be probed on the Moon.
+    </td>
+    <td width="50%" valign="top">
+      <h3>🆚 Side-by-Side Comparison &amp; Horizon View</h3>
+      Compare up to 3 sites live, and see exactly where the Sun and Earth sit relative to the local horizon, including the 0°–5° grazing comms zone.
+    </td>
+  </tr>
+</table>
+
+---
+
+## 🧮 The 4-Factor Risk Formula
+
+Each factor is scored independently, and the **worst factor dominates** the overall verdict (`NO-GO` > `CAUTION` > `GO`). The limits below are the default **Artemis** profile and scale live with the selected lander profile / presets.
+
+| Verdict | Terrain Slope | Solar Illumination | Surface Roughness | Earth Direct Line-of-Sight |
+| :--- | :--- | :--- | :--- | :--- |
+| 🟢 **GO** | `< 7.5°` | `≥ 60%` | Within tolerance (`LOW`) | Direct link available |
+| 🟡 **CAUTION** | `7.5°` – `10°` | `30%` – `59%` | `MODERATE` above tolerance | Relay-tolerant mission without direct link |
+| 🔴 **NO-GO** | `> 10°` (tip-over risk) | `< 30%` (deep shadow / PSR-like) | `HIGH` beyond tolerance | Blocked while direct link is required |
+
+> The baseline thresholds in [`riskEngine.ts`](./client/src/engine/riskEngine.ts) (`slope 5° / 15°`, `illumination 70% / 30%`) apply when no lander profile is supplied. The UI additionally flags a **grazing Earth link (`0°` – `5°` elevation)** as a comms-margin warning tier. Full rationale: [`docs/risk_methodology.md`](./docs/risk_methodology.md).
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technologies |
+| :--- | :--- |
+| **Frontend & 3D** | React 18, TypeScript 5.6, Three.js (WebGL), Tailwind CSS 3.4, Lucide Icons |
+| **Data & Ephemeris** | NASA LRO LOLA, LRO LROC (ASU), modeled JPL Horizons-style Sun / Earth geometry, IAU Gazetteer, NASA Artemis candidate regions (Oct 2024) |
+| **Deployment & Tooling** | Vite 5, Docker, Nginx, Vercel |
+
+---
+
+## 🔗 Submission Deliverables & Quick Links
+
+| Deliverable | Link |
+| :--- | :--- |
+| **Live Interactive Mission Control** | [to-land-or-not-to-land.vercel.app](https://to-land-or-not-to-land.vercel.app/) |
+| **Project Master Architecture** | [`ARCHITECTURE.md`](./ARCHITECTURE.md) |
+| **Candidate Sites & Terrain Catalog** | [`docs/candidate_sites.md`](./docs/candidate_sites.md) |
+| **NASA Data Sources & Documentation** | [`docs/data_sources.md`](./docs/data_sources.md) |
+| **Risk Scoring Methodology** | [`docs/risk_methodology.md`](./docs/risk_methodology.md) |
+| **Source Code** | [github.com/AdeshDeshmukh/to-land-or-not-to-land-](https://github.com/AdeshDeshmukh/to-land-or-not-to-land-) |
+| **Space Apps Submission Profile** | _TODO: insert Space Apps project page link_ |
 
 ---
 
@@ -51,6 +151,7 @@ Because solar elevation hovers only **`+1°` to `+4°`** above the polar horizon
 - **Whole-Moon 3D WebGL Globe** built with `THREE.ObjectSpaceNormalMap`, isotropic polar LROC blending, and spherical LOLA elevation gradients so `-90°` renders seamlessly with zero polar distortion or starburst artifacts.
 - **2.4 km × 2.4 km Local 3D Surface DEM Inspector (`10 m/px`)** capable of zooming down to meter-scale boulders, crater bowls, regolith micro-relief, and interactive touchdown pad relocation.
 - **Live 4-Factor Flight Risk Engine & Synodic Cycle Ephemeris Simulator** that dynamically recalculates `GO` / `CAUTION` / `NO-GO` verdicts, shadows, and Earth LOS across arbitrary Moon coordinates and UTC mission timestamps.
+- **NASA Artemis candidate regions, 3D deep-space context & side-by-side comparison**: the 9 shortlisted regions, a real-time 3D starfield / Earth / Sun skybox, a local horizon sky view, and up to 3 sites compared live.
 
 ---
 
@@ -59,13 +160,18 @@ Because solar elevation hovers only **`+1°` to `+4°`** above the polar horizon
 | Capability | Module | Engineering Highlights |
 | :--- | :--- | :--- |
 | **Whole-Moon 3D Globe** | `LunarGlobe3D.tsx` | `256 × 256` tessellation, native **4K (`4096 × 2048`)** LROC monochrome albedo (`maxAniso`), **`2048 × 1024`** Gaussian-deblocked `THREE.ObjectSpaceNormalMap` (zero polar TBN seams), `absLat > 84°` isotropic 4-tap LROC cap smoothing, and 27 IAU South Pole craters + 45 procedural micro-craters (`-68°` to `-78°` Hermite feathering). |
-| **Quaternion Orbit Controls** | `LunarGlobe3D.tsx` | Gimbal-lock-free arcball/quaternion orbital rotation around `(0, 0, 0)` with inertial damping, fine low-orbit drag scaling (`MIN_CAM_DIST = 4.10`), and zero-React-rerender 60 FPS imperative DOM pin/leader-line projection. |
+| **North-Up Orbit Controls** | `LunarGlobe3D.tsx` | Moon Trek-style north-up selenographic (lat / lon) orbit camera with inertial damping, wheel zoom (`MIN_CAM_DIST = 4.10`, `MAX_CAM_DIST = 22.0`), smooth fly-to for site selection, one-click **`South Pole`** (exact `90°S`) and **`Earth-Side`** presets, and zero-React-rerender 60 FPS imperative DOM pin/leader-line projection. |
+| **3D Deep-Space Skybox** | `celestialSkybox3D.ts`, `LunarGlobe3D.tsx` | Native-pixel pinpoint `THREE.Points` starfield (`10,500` deep-field + `3,200` mid-field + `380` bright stars in spectral tints), a Milky Way sky sphere, a procedural 3D Earth (clouds, earthshine, city lights, Fresnel limb) and a 3D Sun with corona, all positioned from the live Sun / Earth ephemeris vectors. |
+| **NASA Artemis Candidate Sites** | `LunarGlobe3D.tsx`, `candidateSites.ts` | The 9 regions from NASA's October 28, 2024 shortlist, a marker **`ON` / `OFF`** toggle, and a hover **`i`** provenance popover linking to NASA and the LPI South Pole Atlas. |
+| **Sun / Earth Vectors & Grid** | `LunarGlobe3D.tsx` | Toggleable 3D Sun / Earth direction arrows with live sub-point labels and a toggleable selenographic grid (on by default); **Ambient Light** is off by default so the real day / night terminator stays high-contrast. |
 | **Dynamic RYG Overlay HUD** | `LunarGlobe3D.tsx` | Smooth `1024 × 512` translucent sphere layer driven by mission constraints and UTC ephemeris; toggleable **`Landing Assessment Overlay: ON / OFF`** and live **`Overlay Opacity (0–100%, default 42%)`** slider over unobstructed monochrome terrain. |
 | **Click-to-Inspect & Custom Coords** | `LunarGlobe3D.tsx`, `App.tsx` | Single-click any location on the Moon to sample the LOLA grid, deploy a target probe pin, and inspect live `GO`/`CAUTION`/`NO-GO` telemetry in `[data-testid="surface-risk-hud"]`; or deploy exact targets via the `COORDS` popover. |
 | **2.4 km 3D Local Surface DEM** | `LocalSurfaceDetailView.tsx` | Coordinate-seeded `240 × 240` (`10 m/px`) local lunar DEM patch with 3D `InstancedMesh` boulder clusters, ray-marched crater self-shadowing, **`Regolith` / `RYG Hazard` / `Topo Contours`** modes, **`Mesh`** wireframe, camera presets (`Oblique`, `Low Grazing`, `Overhead`), and clickable 3D / `220 × 220` 2D Mini-Map touchdown pad relocation. |
 | **4-Factor Risk Engine** | `riskEngine.ts` | Evaluates **Terrain Slope**, **Surface Roughness**, **Solar Illumination**, and **Earth LOS (DTE)** against customizable vehicle limits with deterministic worst-case dominance (`RED > YELLOW > GREEN`). |
-| **Synodic Cycle & UTC Simulator** | `lunarTelemetry.ts`, `App.tsx` | Scrub $\pm 14.77\text{ days}$ across the `29.530589`-day lunar synodic cycle or step UTC (`-1D`, `-6H`, `T0`, `+6H`, `+1D`, custom date/time) while synchronizing 3D directional lighting, horizon masks, DTE libration, and `CountdownTimers`. |
-| **Flight Telemetry & Dual Modes** | `HorizonPlot.tsx`, `MethodologyModal.tsx`, `Glossary.tsx` | Slide-out left (`Mission Inputs`) & right (`Telemetry`) drawers, 2D Sun/Earth azimuth-elevation `HorizonPlot`, topographic `ElevationProfile`, `PlainEnglishSummary`, **`Planner` vs `Educator`** inline glossary tooltips, and Scoring Methodology modal. |
+| **Synodic Cycle & UTC Simulator** | `lunarTelemetry.ts`, `App.tsx` | Scrub `±14 days` around an editable **Mission Epoch (UTC)** across the `29.530589`-day lunar synodic cycle (the slider's `Nominal` label follows the epoch) or step UTC (`-1D`, `-6H`, `T0`, `+6H`, `+1D`, custom date/time) while synchronizing 3D directional lighting, horizon masks, DTE libration, and `CountdownTimers`; **`Best Sun Window`** jumps to peak solar elevation. |
+| **Local Horizon & Sky View** | `LocalHorizonSkyView.tsx` | Compact sky-dome widget in the Site Assessment drawer plotting the Sun and Earth at their computed azimuth / elevation relative to the `0°` horizon and the `0°`–`5°` grazing comms band. |
+| **Side-by-Side Site Comparison** | `App.tsx` | Queue up to `3` sites (including custom coordinates) and compare verdict, slope, roughness, solar illumination, Earth LOS tier and operational windows live as the timeline or constraints change. |
+| **Flight Telemetry & Dual Modes** | `HorizonPlot.tsx`, `MethodologyModal.tsx`, `Glossary.tsx` | Slide-out left (`Mission Inputs`) & right (`Site Assessment`) drawers, 2D Sun/Earth azimuth-elevation `HorizonPlot`, topographic `ElevationProfile`, `PlainEnglishSummary`, **`Planner` vs `Educator`** mode with plain-English callouts, and the Scoring Methodology popover. |
 
 ---
 
@@ -301,15 +407,21 @@ sequenceDiagram
 
 ## 4. Curated Landing Sites & Lander Profiles
 
-### Benchmark Candidate Sites ([`candidateSites.ts`](./client/src/data/candidateSites.ts))
+### NASA Artemis Candidate Landing Regions ([`candidateSites.ts`](./client/src/data/candidateSites.ts))
 
-| Site Name | Region | Lat / Lon | Elevation | Slope | Roughness | Baseline Sun Flux | Earth DTE | Mission Significance |
-| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| **Shackleton Crater Rim** | South Pole | `-89.54°`, `0.00°` | `+4,200 m` | `4.2°` | `LOW` | `86%` | Direct LOS | Priority Artemis III ridge adjacent to PSR water-ice cold traps. |
-| **Connecting Ridge** | South Pole | `-89.45°`, `-137.30° (137.30°W)` | `+3,850 m` | `9.6°` | `MODERATE` | `64%` | Direct LOS | Elevated Artemis ridge corridor with narrow landing tolerances. |
-| **Malapert Mountain Peak** | South Pole | `-84.90°`, `12.90°` | `+5,000 m` | `7.8°` | `MODERATE` | `78%` | Direct LOS | Prominent southern massif providing strong Earth relay geometry. |
-| **Nobile Crater Region** | South Pole | `-85.20°`, `53.50°` | `-1,200 m` | `18.4°` | `HIGH` | `18%` | Occluded | Deep volatile-bearing depression with severe wall & shadow hazards. |
-| **Mare Tranquillitatis (Apollo 11)** | Equatorial | `0.67°`, `23.47°` | `-20 m` | `1.8°` | `LOW` | `92%` | Direct LOS | Historical baseline basaltic plain with minimal terrain hazard. |
+The 9 regions below come from NASA's shortlist finalized on **October 28, 2024** ([NASA release](https://www.nasa.gov/news-release/nasa-identifies-candidate-regions-for-landing-next-americans-on-moon/), [LPI South Pole Atlas](https://www.lpi.usra.edu/lunar/lunar-south-pole-atlas/)). Coordinates and selection status follow NASA / LPI; elevation, slope, roughness and baseline illumination / Earth-link values are **approximate modeled estimates** for the demo risk engine, not official NASA site assessments. Full catalog: [`docs/candidate_sites.md`](./docs/candidate_sites.md).
+
+| # | Site Name | Lat / Lon | Elevation | Slope | Roughness | Baseline Sun Flux | Earth DTE | Selection Status |
+| :-: | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| 1 | **Peak near Cabeus B** | `-83.60°`, `-68.80°` | `+1,450 m` | `5.4°` | `LOW` | `82%` | Direct LOS | Added in 2024 |
+| 2 | **Haworth** | `-87.45°`, `-5.17°` | `+1,920 m` | `8.6°` | `MODERATE` | `76%` | Direct LOS | Retained from 2022 |
+| 3 | **Malapert Massif** | `-86.00°`, `+2.70°` | `+4,850 m` | `6.8°` | `MODERATE` | `86%` | Direct LOS | Retained from 2022 |
+| 4 | **Mons Mouton** | `-84.60°`, `+31.00°` | `+5,100 m` | `4.1°` | `LOW` | `89%` | Direct LOS | Added in 2024 |
+| 5 | **Mons Mouton Plateau** | `-84.30°`, `+30.60°` | `+4,720 m` | `3.4°` | `LOW` | `88%` | Direct LOS | Added in 2024 |
+| 6 | **Nobile Rim 1** | `-85.30°`, `+31.50°` | `+2,680 m` | `9.2°` | `MODERATE` | `74%` | Direct LOS | Retained from 2022 |
+| 7 | **Nobile Rim 2** | `-84.20°`, `+60.70°` | `+1,840 m` | `14.8°` | `HIGH` | `54%` | Occluded | Retained from 2022 |
+| 8 | **de Gerlache Rim 2** | `-88.71°`, `-64.00°` | `+2,950 m` | `6.2°` | `MODERATE` | `84%` | Direct LOS | Retained from 2022 |
+| 9 | **Slater Plain** | `-87.13°`, `+127.86°` | `-420 m` | `4.5°` | `LOW` | `68%` | Occluded | Added in 2024 |
 
 ### Reference Spacecraft Constraint Profiles ([`landerProfiles.ts`](./client/src/data/landerProfiles.ts))
 
@@ -330,6 +442,7 @@ to-land-or-not-to-land-/
 ├── .github/
 │   └── PULL_REQUEST_TEMPLATE.md      # NASA dataset attribution & verification PR checklist
 ├── docs/
+│   ├── assets/                       # README hero & feature screenshots (compressed JPEGs)
 │   ├── CESIUMJS_3D_GLOBE_SPEC.md     # Architectural spec for global-to-polar 3D visualization
 │   ├── LAURI_TASK_PLAN.md            # Science & visualization milestone plan
 │   ├── candidate_sites.md            # Terrain dossier on Artemis candidate landing zones
@@ -347,8 +460,9 @@ to-land-or-not-to-land-/
 │   │       └── lola_slope_overlay_2k.png # Reference LOLA gradient map
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── LunarGlobe3D.tsx          # Main 3D WebGL Moon, ObjectSpaceNormalMap & HUD
+│   │   │   ├── LunarGlobe3D.tsx          # Main 3D WebGL Moon, skybox, Artemis markers, vectors & HUD
 │   │   │   ├── LocalSurfaceDetailView.tsx# 2.4 km x 2.4 km 3D Local DEM, boulders & 2D contour map
+│   │   │   ├── LocalHorizonSkyView.tsx   # Local horizon sky dome with Sun/Earth az-el & grazing band
 │   │   │   ├── LandingParametersPanel.tsx# Mission constraints sliders, toggles & presets
 │   │   │   ├── HorizonPlot.tsx           # 360 deg polar azimuth-elevation Sun/Earth sky plot
 │   │   │   ├── ElevationProfile.tsx      # 1 km landing approach cross-section profile
@@ -363,13 +477,14 @@ to-land-or-not-to-land-/
 │   │   │   ├── Starfield.tsx             # Ambient procedural deep-space star backdrop
 │   │   │   └── LunarGlobe.tsx            # Lightweight legacy 2D orbital preview helper
 │   │   ├── data/
-│   │   │   ├── candidateSites.ts         # 5 benchmark lunar landing site definitions
+│   │   │   ├── candidateSites.ts         # 9 NASA Artemis candidate region definitions
 │   │   │   └── landerProfiles.ts         # 4 aerospace vehicle constraint profiles
 │   │   ├── engine/
 │   │   │   └── riskEngine.ts             # 4-factor evaluation & overall G/Y/R assessment logic
 │   │   ├── types/
 │   │   │   └── index.ts                  # Strict TypeScript domain models & interfaces
 │   │   ├── utils/
+│   │   │   ├── celestialSkybox3D.ts      # Procedural 3D starfield, Milky Way, Earth & Sun space environment
 │   │   │   └── lunarTelemetry.ts         # Selenographic math, 72 polar craters, Sun/Earth ephem
 │   │   ├── App.tsx                       # Root telemetry state, drawers, time playback & modals
 │   │   ├── index.css                     # Obsidian monochrome HUD palette & range slider styling
@@ -465,7 +580,9 @@ npm run preview
 | **LRO LOLA DEM (`lola_bump_2k.jpg`)** | NASA GSFC / LOLA Science Team | Global elevation relief, spherical gradient slope computation, and local terrain baseline | [`docs/data_sources.md`](./docs/data_sources.md) |
 | **LRO LROC WAC & Poles Mosaic** | NASA / ASU LROC | Photorealistic grayscale lunar albedo and isotropic polar cap detail (`4k`) | [`docs/data_sources.md`](./docs/data_sources.md) |
 | **JPL Horizons Geometry Model** | NASA JPL | Subsolar progression & Earth optical libration ephemeris alignment | [`lunarTelemetry.ts`](./client/src/utils/lunarTelemetry.ts) |
-| **IAU Gazetteer / Artemis Site Catalog** | IAU / NASA Artemis Planning | Benchmark South Pole craters (27 named basins) & landing candidate parameters | [`docs/candidate_sites.md`](./docs/candidate_sites.md) |
+| **IAU Gazetteer / Artemis Site Catalog** | IAU / NASA Artemis Planning | Benchmark South Pole craters (27 named basins) & the 9 Artemis candidate landing regions | [`docs/candidate_sites.md`](./docs/candidate_sites.md) |
+| **NASA Artemis Candidate Landing Regions (Oct 28, 2024)** | NASA | Names, coordinates and selection status of the 9 candidate regions | [NASA release](https://www.nasa.gov/news-release/nasa-identifies-candidate-regions-for-landing-next-americans-on-moon/) |
+| **LPI Lunar South Pole Atlas** | Lunar and Planetary Institute (USRA) | Reference topographic and illumination maps for the candidate regions | [LPI Atlas](https://www.lpi.usra.edu/lunar/lunar-south-pole-atlas/) |
 
 ---
 
