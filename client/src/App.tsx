@@ -3,7 +3,7 @@ import { CANDIDATE_SITES } from './data/candidateSites';
 import { assessLandingSiteRisk } from './engine/riskEngine';
 import { 
   computeSiteIllumination, 
-  computeSiteEarthLos,
+  computeEarthTelemetryAtTime,
   estimateLunarTerrain,
   formatMissionUtc,
   parseMissionUtcInputs,
@@ -117,13 +117,20 @@ export default function App() {
   }, [isPlaying, playbackSpeed]);
 
   const computedIllumination = computeSiteIllumination(selectedSite, simulatedDateOffset);
-  const computedEarthLos = computeSiteEarthLos(selectedSite, simulatedDateOffset);
+  const computedEarthTelemetry = computeEarthTelemetryAtTime(
+    selectedSite.coordinates.latitude,
+    selectedSite.coordinates.longitude,
+    simulatedDateOffset,
+    selectedSite
+  );
+  const computedEarthLos = computedEarthTelemetry.hasLos;
 
   const assessment = assessLandingSiteRisk(
     selectedSite, 
     computedIllumination, 
     computedEarthLos, 
-    landingParams
+    landingParams,
+    computedEarthTelemetry.effectiveEarthElevDeg
   );
 
   const getStatusBadge = (status: 'GREEN' | 'YELLOW' | 'RED') => {
@@ -265,8 +272,19 @@ export default function App() {
             <div className="space-y-1.5">
               {allSites.map((site) => {
                 const siteIllum = computeSiteIllumination(site, simulatedDateOffset);
-                const siteLos = computeSiteEarthLos(site, simulatedDateOffset);
-                const siteRisk = assessLandingSiteRisk(site, siteIllum, siteLos, landingParams);
+                const siteEarthTel = computeEarthTelemetryAtTime(
+                  site.coordinates.latitude,
+                  site.coordinates.longitude,
+                  simulatedDateOffset,
+                  site
+                );
+                const siteRisk = assessLandingSiteRisk(
+                  site,
+                  siteIllum,
+                  siteEarthTel.hasLos,
+                  landingParams,
+                  siteEarthTel.effectiveEarthElevDeg
+                );
                 const isSelected = site.id === selectedSite.id;
                 return (
                   <button
@@ -572,7 +590,9 @@ export default function App() {
                 </span>
                 <h3 className="text-base font-bold text-white tracking-tight mt-0.5">{selectedSite.name}</h3>
                 <span className="text-[11px] text-[#9CA3AF] font-mono tabular-nums">
-                  {selectedSite.coordinates.latitude}° N, {selectedSite.coordinates.longitude}° E · ELEV {selectedSite.coordinates.elevation_m}M
+                  {Math.abs(selectedSite.coordinates.latitude).toFixed(2)}° {selectedSite.coordinates.latitude >= 0 ? 'N' : 'S'},{' '}
+                  {Math.abs(selectedSite.coordinates.longitude).toFixed(2)}° {selectedSite.coordinates.longitude >= 0 ? 'E' : 'W'} ·{' '}
+                  ELEV {selectedSite.coordinates.elevation_m}M · EARTH {computedEarthTelemetry.effectiveEarthElevDeg >= 0 ? '+' : ''}{computedEarthTelemetry.effectiveEarthElevDeg.toFixed(1)}°
                 </span>
               </div>
               <div className="shrink-0">{getStatusBadge(assessment.overall_status)}</div>
