@@ -6,7 +6,8 @@
 
 *Built for NASA Space Apps Challenge 2026 — Open Science & Artemis Lunar South Pole Exploration*
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-black?style=for-the-badge)](./LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-black?style=for-the-badge)](./LICENSE)
+[![Live Demo](https://img.shields.io/badge/Live_Demo-Vercel_Deployment-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://to-land-or-not-to-land.vercel.app/)
 [![NASA Space Apps 2026](https://img.shields.io/badge/NASA_Space_Apps-2026-0B3D91?style=for-the-badge&logo=nasa&logoColor=white)](https://www.spaceappschallenge.org/)
 [![React 18.3](https://img.shields.io/badge/React-18.3-111827?style=for-the-badge&logo=react&logoColor=61DAFB)](https://react.dev/)
 [![TypeScript 5.6](https://img.shields.io/badge/TypeScript-5.6-111827?style=for-the-badge&logo=typescript&logoColor=3178C6)](https://www.typescriptlang.org/)
@@ -15,6 +16,13 @@
 [![Docker Ready](https://img.shields.io/badge/Docker-Nginx_Multi--Stage-090A0D?style=for-the-badge&logo=docker&logoColor=2496ED)](./Dockerfile)
 
 </div>
+
+---
+
+### 🌐 Live Interactive Mission Control
+> **Experience the platform live in your browser:**  
+> 🔗 **[https://to-land-or-not-to-land.vercel.app/](https://to-land-or-not-to-land.vercel.app/)**  
+> *(Zero installation required — WebGL 3D lunar terrain, real NASA datasets, and real-time telemetry)*
 
 ---
 
@@ -477,4 +485,4 @@ Every contribution in this repository adheres to the verification workflow defin
 
 ### License
 
-Distributed under the **MIT License** — see [`LICENSE`](./LICENSE) for full terms.
+Distributed under the **Apache License 2.0** — see [`LICENSE`](./LICENSE) for full terms. Built for the NASA Space Apps Challenge 2026.
