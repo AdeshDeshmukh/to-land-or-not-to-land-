@@ -498,7 +498,7 @@ to-land-or-not-to-land-/
 ├── ARCHITECTURE.md                   # High-level platform design reference
 ├── Dockerfile                        # Multi-stage Node 20 build -> Nginx 1.25 production image
 ├── docker-compose.yml                # One-command containerized deployment on port 3000
-├── LICENSE                           # MIT Open Source License
+├── LICENSE                           # Apache 2.0 Open Source License
 ├── nginx.conf                        # SPA Nginx static serving configuration
 └── README.md                         # This documentation
 ```
